@@ -21,6 +21,8 @@ extern bool g_verbose;
 
 /* --------------------------------DOMAIN CONFIG-------------------------------- */
 #define COMMAND_CONFIG_DEBUG_OUTPUT          "debug_output"
+#define COMMAND_CONFIG_WINDOW_RECONCILIATION "window_reconciliation"
+#define COMMAND_CONFIG_RECONCILIATION_INTERVAL "window_reconciliation_interval"
 #define COMMAND_CONFIG_MFF                   "mouse_follows_focus"
 #define COMMAND_CONFIG_FFM                   "focus_follows_mouse"
 #define COMMAND_CONFIG_DISPLAY_ORDER         "display_arrangement_order"
@@ -1150,6 +1152,43 @@ static struct selector parse_insert_selector(FILE *rsp, char **message)
     return result;
 }
 
+// Auto-reconcile is opt-in. The dispatch timer runs on the main queue and
+// schedules a tick on yabai's event loop, where window tables are owned.
+static bool g_window_reconciliation_enabled = false;
+static int g_window_reconciliation_interval_ms = 750;
+static dispatch_source_t g_window_reconciliation_timer;
+static bool g_window_reconciliation_pending;
+
+static void window_reconciliation_update_timer(void)
+{
+    if (!g_window_reconciliation_timer) {
+        if (!g_window_reconciliation_enabled) return;
+
+        g_window_reconciliation_timer = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        if (!g_window_reconciliation_timer) return;
+
+        dispatch_source_set_event_handler(g_window_reconciliation_timer, ^{
+            // A slow AX scan must not allow timer events to accumulate.
+            if (!__atomic_exchange_n(&g_window_reconciliation_pending, true, __ATOMIC_ACQ_REL)) {
+                event_loop_post(&g_event_loop, WINDOW_RECONCILE, NULL, 0);
+            }
+        });
+        dispatch_resume(g_window_reconciliation_timer);
+    }
+
+    if (g_window_reconciliation_enabled) {
+        uint64_t ns = (uint64_t)g_window_reconciliation_interval_ms * NSEC_PER_MSEC;
+        dispatch_source_set_timer(g_window_reconciliation_timer,
+                                  dispatch_time(DISPATCH_TIME_NOW, ns), ns,
+                                  50 * NSEC_PER_MSEC);
+    } else {
+        // Do not keep waking the daemon when the feature is disabled.
+        dispatch_source_set_timer(g_window_reconciliation_timer,
+                                  DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
+    }
+}
+
 static void handle_domain_config(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
@@ -1168,7 +1207,32 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
     }
 
     for (; token_is_valid(command); command = get_token(&message)) {
-        if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
+        if (token_equals(command, COMMAND_CONFIG_WINDOW_RECONCILIATION)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_reconciliation_enabled]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON) ||
+                       token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                g_window_reconciliation_enabled = token_equals(value, ARGUMENT_COMMON_VAL_ON);
+                window_reconciliation_update_timer();
+            } else {
+                daemon_fail(rsp, "window_reconciliation expects 'on' or 'off'.\n");
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_RECONCILIATION_INTERVAL)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%d\n", g_window_reconciliation_interval_ms);
+            } else {
+                int interval;
+                if (value.length > 5 || !token_is_positive_integer(value, &interval) ||
+                    interval < 250 || interval > 10000) {
+                    daemon_fail(rsp, "window_reconciliation_interval must be 250..10000 ms.\n");
+                } else {
+                    g_window_reconciliation_interval_ms = interval;
+                    window_reconciliation_update_timer();
+                }
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", bool_str[g_verbose]);
@@ -2064,6 +2128,24 @@ static void queue_missing_application_windows(struct application *application, i
     }
 
     CFRelease(window_list);
+}
+
+// Runs on the yabai event loop, never on the timer/main queue.
+void window_reconciliation_tick(void)
+{
+    if (g_window_reconciliation_enabled) {
+        int queued = 0;
+        table_for (struct application *application, g_window_manager.application, {
+            // Initial scope is intentionally limited to Zen (Firefox-derived).
+            if (!application->is_hidden && application->name &&
+                string_equals(application->name, "Zen")) {
+                queue_missing_application_windows(application, &queued);
+            }
+        })
+        if (queued) debug("window_reconciliation: queued %d Zen window(s)\n", queued);
+    }
+
+    __atomic_store_n(&g_window_reconciliation_pending, false, __ATOMIC_RELEASE);
 }
 
 static void refresh_untracked_windows(FILE *rsp)

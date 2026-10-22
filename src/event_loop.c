@@ -8,6 +8,7 @@ extern enum mission_control_mode g_mission_control_mode;
 extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
+void window_reconciliation_tick(void);
 volatile bool __pending_window_focus;
 volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
@@ -1609,6 +1610,11 @@ static EVENT_HANDLER(SYSTEM_WOKE)
     }
 
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
+}
+
+static EVENT_HANDLER(WINDOW_RECONCILE)
+{
+    window_reconciliation_tick();
 }
 
 static EVENT_HANDLER(DAEMON_MESSAGE)
