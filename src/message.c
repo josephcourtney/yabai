@@ -2403,7 +2403,19 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             struct token value = get_token(&message);
             if (token_equals(value, ARGUMENT_WINDOW_TOGGLE_FLOAT)) {
                 if (acting_window) {
-                    window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, !window_check_flag(acting_window, WINDOW_FLOAT), false);
+                    if (window_check_flag(acting_window, WINDOW_FLOAT)) {
+                        // An explicitly tiled window must survive layout-tree rebuilds.
+                        // This mirrors manage=on rules, even for nonstandard windows.
+                        window_set_rule_flag(acting_window, WINDOW_RULE_MANAGED);
+                        window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, false, false);
+                    } else {
+                        // Retain the managed override until the window is floated;
+                        // removing it earlier can fail eligibility checks.
+                        window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, true, false);
+                        if (window_check_flag(acting_window, WINDOW_FLOAT)) {
+                            window_clear_rule_flag(acting_window, WINDOW_RULE_MANAGED);
+                        }
+                    }
                 } else {
                     daemon_fail(rsp, "could not locate the window to act on!\n");
                 }
