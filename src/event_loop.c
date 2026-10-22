@@ -14,24 +14,64 @@ volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
 
+// Keep the usual notification update allocation-free, but grow rather than
+// overflow its stack buffer if more windows are ever tracked.
+static bool window_notification_append(uint32_t **list, int *count, int *capacity,
+                                       bool *heap_allocated, uint32_t window_id)
+{
+    if (*count >= *capacity) {
+        // Do not overflow a signed int when doubling the capacity.
+        if (*capacity > 0x3fffffff) return false;
+        int new_capacity = *capacity * 2;
+        size_t bytes = (size_t) new_capacity * sizeof(uint32_t);
+        uint32_t *expanded = *heap_allocated ? realloc(*list, bytes) : malloc(bytes);
+        if (!expanded) return false;
+
+        if (!*heap_allocated) memcpy(expanded, *list, (size_t) *count * sizeof(uint32_t));
+        *list = expanded;
+        *capacity = new_capacity;
+        *heap_allocated = true;
+    }
+
+    (*list)[(*count)++] = window_id;
+    return true;
+}
+
 static void update_window_notifications(void)
 {
     int window_count = 0;
-    uint32_t window_list[1024] = {0};
+    uint32_t local_window_list[1024] = {0};
+    uint32_t *window_list = local_window_list;
+    int window_capacity = (int) array_count(local_window_list);
+    bool heap_allocated = false;
+    bool complete = true;
 
     if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         // NOTE(asmvik): Subscribe to all windows because of window_destroyed (and ordered) notifications
         table_for (struct window *window, g_window_manager.window, {
-            window_list[window_count++] = window->id;
+            if (complete && !window_notification_append(&window_list, &window_count,
+                                                         &window_capacity, &heap_allocated, window->id)) {
+                complete = false;
+            }
         })
     } else {
         // NOTE(asmvik): Subscribe to windows that have a feedback_border because of window_ordered notifications
         table_for (struct window_node *node, g_window_manager.insert_feedback, {
-            window_list[window_count++] = node->window_order[0];
+            if (complete && !window_notification_append(&window_list, &window_count,
+                                                         &window_capacity, &heap_allocated, node->window_order[0])) {
+                complete = false;
+            }
         })
     }
 
-    SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+    // Do not subscribe with a truncated list after allocation failure.
+    if (complete) {
+        SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+    } else {
+        fprintf(stderr, "yabai: unable to allocate window-notification list\n");
+    }
+
+    if (heap_allocated) free(window_list);
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
