@@ -129,6 +129,7 @@ extern bool g_verbose;
 
 /* --------------------------------DOMAIN WINDOW-------------------------------- */
 #define COMMAND_WINDOW_FOCUS      "--focus"
+#define COMMAND_WINDOW_REFRESH    "--refresh"
 #define COMMAND_WINDOW_CLOSE      "--close"
 #define COMMAND_WINDOW_MINIMIZE   "--minimize"
 #define COMMAND_WINDOW_DEMINIMIZE "--deminimize"
@@ -2044,9 +2045,58 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
     }
 }
 
+// Recover AX windows that were created without a kAXCreatedNotification.
+// The existing WINDOW_CREATED handler validates and manages each candidate.
+static void queue_missing_application_windows(struct application *application, int *queued)
+{
+    CFArrayRef window_list = application_window_list(application);
+    if (!window_list) return;
+
+    CFIndex count = CFArrayGetCount(window_list);
+    for (CFIndex i = 0; i < count; ++i) {
+        AXUIElementRef ref = (AXUIElementRef) CFArrayGetValueAtIndex(window_list, i);
+        uint32_t wid = ax_window_id(ref);
+        if (!wid || window_manager_find_window(&g_window_manager, wid)) continue;
+
+        // WINDOW_CREATED takes ownership of the retained AX reference.
+        event_loop_post(&g_event_loop, WINDOW_CREATED, (void *) CFRetain(ref), 0);
+        ++*queued;
+    }
+
+    CFRelease(window_list);
+}
+
+static void refresh_untracked_windows(FILE *rsp)
+{
+    int queued = 0;
+    // The terminal invoking --refresh may have become frontmost, so inspect
+    // all non-hidden registered applications rather than only the active one.
+    table_for (struct application *application, g_window_manager.application, {
+        if (!application->is_hidden) {
+            queue_missing_application_windows(application, &queued);
+        }
+    })
+
+    fprintf(rsp, "queued %d previously untracked window(s)\n", queued);
+}
+
 static void handle_domain_window(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
+
+    // Handle --refresh before resolving an acting window. No focused window
+    // is required and the command should not consume a window selector.
+    char *message_start = message;
+    struct token first = get_token(&message);
+    if (token_equals(first, COMMAND_WINDOW_REFRESH)) {
+        if (token_is_valid(get_token(&message))) {
+            daemon_fail(rsp, "'--refresh' does not accept additional arguments.\n");
+        } else {
+            refresh_untracked_windows(rsp);
+        }
+        return;
+    }
+    message = message_start;
 
     struct token command;
     struct window *acting_window = window_manager_focused_window(&g_window_manager);
