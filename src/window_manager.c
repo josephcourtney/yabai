@@ -2283,7 +2283,8 @@ void window_manager_wait_for_native_fullscreen_transition(struct window *window)
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
         (workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
-        while (!space_is_user(space_manager_active_space())) {
+        int timeout = 30;
+        while (!space_is_user(space_manager_active_space()) && --timeout > 0) {
 
             //
             // NOTE(asmvik): Window has exited native-fullscreen mode.
@@ -2356,7 +2357,8 @@ void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct 
     if (node->zoom == node->parent) {
         node->zoom = NULL;
         if (space_is_visible(view->sid)) {
-            window_node_flush(node);
+            // Unzooming can change the geometry of the entire parent subtree.
+            window_node_flush(node->parent);
         } else {
             view_set_flag(view, VIEW_IS_DIRTY);
         }
@@ -2385,7 +2387,7 @@ void window_manager_toggle_window_zoom_fullscreen(struct window_manager *wm, str
     if (node->zoom == view->root) {
         node->zoom = NULL;
         if (space_is_visible(view->sid)) {
-            window_node_flush(node);
+            window_node_flush(view->root);
         } else {
             view_set_flag(view, VIEW_IS_DIRTY);
         }
@@ -2412,7 +2414,8 @@ void window_manager_toggle_window_windowed_fullscreen(struct window *window)
     } else {
         window_set_flag(window, WINDOW_WINDOWED);
         window->windowed_frame = window->frame;
-        CGRect bounds = display_bounds_constrained(did, true);
+        // Preserve configured external bar padding in windowed fullscreen.
+        CGRect bounds = display_bounds_constrained(did, false);
         window_manager_animate_window((struct window_capture) { .window = window, .x = bounds.origin.x, .y = bounds.origin.y, .w = bounds.size.width, .h = bounds.size.height });
     }
 }
@@ -2598,7 +2601,23 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
 {
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_manager_find_window(wm, window_list[i]);
-        if (!window || !window_manager_should_manage_window(window)) continue;
+        if (!window) continue;
+
+        // A fullscreen transition can temporarily clear move/resize flags;
+        // restore them after the window returns to a normal user space.
+        if (space_is_user(view->sid)) {
+            if (window_check_flag(window, WINDOW_FULLSCREEN) && !window_is_fullscreen(window)) {
+                window_clear_flag(window, WINDOW_FULLSCREEN);
+            }
+            if (!window_can_move(window) && window_ax_can_move(window)) {
+                window_set_flag(window, WINDOW_MOVABLE);
+            }
+            if (!window_can_resize(window) && window_ax_can_resize(window)) {
+                window_set_flag(window, WINDOW_RESIZABLE);
+            }
+        }
+
+        if (!window_manager_should_manage_window(window)) continue;
 
         // During a Mission Control drag, the window list can contain a window
         // whose actual space association has not yet finished changing.
