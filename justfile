@@ -44,12 +44,15 @@ qualify-running:
 run: qualify-preflight
     ./bin/yabai --verbose --config {{quote(config_file)}}
 
-# Read-only checks only after confirming the test daemon's executable.
+# Read-only daemon checks that do not require an injected Dock payload.
 smoke: qualify-running
-    ./bin/yabai --check-sa
     @printf 'Displays: '; ./bin/yabai -m query --displays | jq length
     @printf 'Spaces:   '; ./bin/yabai -m query --spaces | jq length
     @printf 'Windows:  '; ./bin/yabai -m query --windows | jq length
+
+# Additionally require a version-matching, healthy Dock scripting addition.
+smoke-sa: smoke
+    ./bin/yabai --check-sa
 
 # Refresh missing accessibility windows manually.
 refresh:
