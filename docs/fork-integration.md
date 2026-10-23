@@ -48,6 +48,15 @@ just smoke
 
 If input becomes unreliable again, use the still-functioning terminal to record process paths and stop the test daemon. Do not assume killing yabai unloads its Dock scripting addition. A Dock restart is a distinct diagnostic intervention.
 
+## Observed macOS 27 runtime qualification (2026-10-23; Scroot closed, no Dock SA)
+
+- Test daemon executable positively identified as `~/code/yabai-qualification/bin/yabai`; no Scroot process. Read-only query smoke passed. Ordinary mouse clicking remained functional.
+- `focus_follows_mouse autofocus` worked; `ffm=off` Finder exclusion blocked hover-based focus transfer while ordinary clicking and eligible-window autofocus remained functional.
+- Four Kitty BSP tiles filled the available layout; deleting three successive windows correctly reflowed surviving tiles to the remaining area. One immediate query briefly reported a closed window during reflow; it disappeared without manual refresh after a short delay.
+- Three-window `zoom-parent` and `zoom-fullscreen` geometry and distinct flags matched expectations; unzoom restored nonoverlapping tiles. `windowed-fullscreen` toggled and restored the starting tiled geometry.
+- Native fullscreen moved Kitty window 1213 into a new fullscreen Space (space ID 57, index 5), then returned it to a regular tiled Space. All three windows were present and nonoverlapping afterward. **The returning window 1213 and another Kitty window 1564 exchanged their upper/lower positions.** Thus native fullscreen entry/exit and valid retile passed, but *exact tile-order preservation was not observed*. The underlying fullscreen path removes the window from the BSP tree and reinserts it on return; this behavior is also present on `compat/macos-27.0.1`. Do not claim this as a demonstrated new regression without comparative testing.
+- These are user-reported local qualification results, not GitHub Actions assertions. No Dock scripting-addition or second-display behaviors have been qualified in this session.
+
 ## Required manual tests on macOS
 
 - Run `just build` and `just smoke` with a signed binary and confirmed test daemon.
