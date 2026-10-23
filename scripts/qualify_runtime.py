@@ -38,7 +38,7 @@ def scroot_process(command_line: str) -> bool:
 
 
 def find_scroot() -> list[str]:
-    lines = command("ps", "-axo", "pid=,command=").stdout.splitlines()
+    lines = command("ps", "-ww", "-axo", "pid=,command=").stdout.splitlines()
     found = []
     for line in lines:
         parts = line.strip().split(None, 1)
