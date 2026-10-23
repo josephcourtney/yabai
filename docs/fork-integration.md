@@ -13,12 +13,45 @@ This branch is based on `compat/macos-27.0.1`; keep `master` untouched until run
 
 The branch retains the existing `--check-sa`, manual/automatic window reconciliation, macOS 27 compatibility, safe notification-buffer growth, and explicit tiling patches.
 
+## Runtime qualification: safety and branch identity
+
+During the 2026-10-22 desktop qualification session, mouse clicks and application activation became unreliable. The accompanying WindowServer `_CGXPackagesSetWindowConstraints: Invalid window` error rate dropped from 91 to 6 occurrences per 30 seconds after **Scroot** exited (with the yabai daemon already stopped). This implicates Scroot in the error flood, but does **not** establish that Scroot caused the input failure. Keep Scroot closed during further yabai testing. No yabai PR is runtime-qualified on the strength of this observation.
+
+There is a second independent pitfall: invoking `./bin/yabai -m` sends commands to the *running daemon*, which may still be the installed `/opt/homebrew/bin/yabai` or a different branch's process. A successful client response does not prove which implementation was exercised.
+
+From the qualification worktree on macOS:
+
+```bash
+cd ~/code/yabai-qualification
+git fetch origin
+git switch --detach origin/integration/fork-correctness-20261022
+make clean
+just build
+just stop-installed
+just qualify-preflight
+```
+
+`just qualify-preflight` is read-only. It fails if a Scroot process is detected or any yabai daemon is still running. It also prints HEAD and the baseline 30-second WindowServer error count; it does not change Dock, SIP, launchd, or configuration.
+
+Run `just run` in Terminal 1; leave it in the foreground. In Terminal 2:
+
+```bash
+cd ~/code/yabai-qualification
+just smoke
+```
+
+`just smoke` now runs `just qualify-running` first. That check uses macOS `proc_pidpath` to verify there is exactly one yabai daemon and that its *actual executable path* matches the test worktree binary. It also rejects a daemon that predates a rebuild. Optional `--ref origin/integration/fork-correctness-20261022` checks the checked-out Git revision. If a check fails, stop the daemon and resolve the mismatch rather than continuing with feature tests.
+
+**Important:** Each of PRs #2–#5 is a separate branch, not a combined build. Stop the foreground daemon before switching branches, clean/rebuild, and restart. Until the qualification helper is included in those branches, keep a copy of it outside the worktree and invoke it directly when testing them. Do not merge before all relevant macOS 27 runtime tests pass.
+
+If input becomes unreliable again, use the still-functioning terminal to record process paths and stop the test daemon. Do not assume killing yabai unloads its Dock scripting addition. A Dock restart is a distinct diagnostic intervention.
+
 ## Required manual tests on macOS
 
-- Run `just build` and `just smoke` with a signed binary and the daemon running.
-- Verify `yabai -m rule --add app="^Finder$" ffm=off`, `yabai -m rule --list`, and mouse entry/exit behavior with global `focus_follows_mouse autofocus`. Reapply rules to existing windows with `yabai -m rule --apply`.
+- Run `just build` and `just smoke` with a signed binary and confirmed test daemon.
+- Verify `yabai -m rule --add app="^Finder$" ffm=off`, `yabai -m rule --list`, and actual mouse entry/exit behavior with global `focus_follows_mouse autofocus`. Reapply rules with `yabai -m rule --apply`.
 - Verify `mouse_follows_focus` remains normal for eligible windows and does **not** warp the pointer to/from PiP and transient dialogs.
-- Close first, middle, and last tiled windows. Confirm the remaining BSP windows fill the freed region.
+- Close first, middle, and last tiled windows. Confirm remaining BSP windows fill the freed region.
 - Toggle window zoom-parent, zoom-fullscreen, and native fullscreen; check every surviving window retile and no event-loop hang.
 - With two displays, drag a space between displays in Mission Control; verify windows remain on that space with updated frames.
 - Check windowed fullscreen against nonzero `external_bar` padding.
