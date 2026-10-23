@@ -142,6 +142,14 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
         window_clear_rule_flag(window, WINDOW_RULE_MFF_VALUE);
     }
 
+    if (effects->ffm == RULE_PROP_ON) {
+        window_set_rule_flag(window, WINDOW_RULE_FFM);
+        window_set_rule_flag(window, WINDOW_RULE_FFM_VALUE);
+    } else if (effects->ffm == RULE_PROP_OFF) {
+        window_set_rule_flag(window, WINDOW_RULE_FFM);
+        window_clear_rule_flag(window, WINDOW_RULE_FFM_VALUE);
+    }
+
     if (rule_effects_check_flag(effects, RULE_LAYER)) {
         window_manager_set_window_layer(window, effects->layer);
     }

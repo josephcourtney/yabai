@@ -1399,11 +1399,16 @@ static EVENT_HANDLER(MOUSE_MOVED)
     if (dt < 1250.0f) goto out;
 
     CGPoint point = CGEventGetLocation(context);
+
+    struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+    if (focused_window && window_check_rule_flag(focused_window, WINDOW_RULE_FFM) && !window_check_rule_flag(focused_window, WINDOW_RULE_FFM_VALUE)) goto out;
+
     struct window *window = window_manager_find_window_at_point(&g_window_manager, point);
 
     if (window) {
         if (window->id == g_window_manager.focused_window_id) goto out;
         if (!window_manager_is_window_eligible(window))       goto out;
+        if (window_check_rule_flag(window, WINDOW_RULE_FFM) && !window_check_rule_flag(window, WINDOW_RULE_FFM_VALUE)) goto out;
 
         if (g_window_manager.ffm_mode == FFM_AUTOFOCUS) {
 
