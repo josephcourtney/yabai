@@ -27,7 +27,7 @@ jobs:
         run: |
           make clean
           make install
-          lipo -verify_arch arm64 ./bin/yabai
+          lipo ./bin/yabai -verify_arch arm64
 
       - name: Run unit tests
         run: make -C tests
