@@ -340,6 +340,10 @@ int main(int argc, char **argv)
     }
 
     window_manager_init(&g_window_manager);
+    bool manage;
+    if (read_config_manage_setting(g_config_file, sizeof(g_config_file), &manage)) {
+        g_window_manager.manage = manage;
+    }
     space_manager_begin(&g_space_manager);
     window_manager_begin(&g_space_manager, &g_window_manager);
 
