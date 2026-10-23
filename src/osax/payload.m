@@ -797,7 +797,8 @@ static void do_window_focus(char *message)
     unpack(wid);
 
     SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection);
-    SLSGetConnectionPSN(SLSMainConnectionID(), &window_psn);
+    // Resolve the process that owns the window, not the main SLS connection.
+    SLSGetConnectionPSN(window_connection, &window_psn);
 
     ((focus_window_call) set_front_window_fp)(window_psn, wid);
 }

@@ -84,7 +84,11 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
 
     if (wm->focused_window_id != window->id) {
-        if (ms->ffm_window_id != window->id) {
+        // Do not warp the cursor for transient PiP, dialog, or other ineligible focus.
+        // Both ends of a genuine window focus transition must be eligible.
+        bool entering_eligible = window->is_eligible;
+        bool leaving_eligible = !focused_window || focused_window->is_eligible;
+        if (ms->ffm_window_id != window->id && entering_eligible && leaving_eligible) {
             window_manager_center_mouse(wm, window);
         }
 
