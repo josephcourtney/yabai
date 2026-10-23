@@ -66,7 +66,23 @@ static void update_window_notifications(void)
 
     // Do not subscribe with a truncated list after allocation failure.
     if (complete) {
-        SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+        CGError err = SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+        if (err != kCGErrorSuccess) {
+            fprintf(stderr, "yabai: window notification subscription failed (count=%d, error=%d)\n",
+                    window_count, (int)err);
+        }
+
+        // The private API reportedly rejects 1024+ windows on some versions;
+        // the actual limit is unverified. Report the risk without silently
+        // dropping windows or changing subscription semantics.
+        static bool warned_large_subscription = false;
+        if (window_count >= 1024 && !warned_large_subscription) {
+            fprintf(stderr, "yabai: window notification subscription for %d windows is unverified; check event delivery\n",
+                    window_count);
+            warned_large_subscription = true;
+        } else if (window_count < 1024) {
+            warned_large_subscription = false;
+        }
     } else {
         fprintf(stderr, "yabai: unable to allocate window-notification list\n");
     }
