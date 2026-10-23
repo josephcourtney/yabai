@@ -1,4 +1,4 @@
-# yabai development helpers. Run from ~/code/yabai.
+# yabai development helpers. Run from the repository/worktree root.
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 sign_id := env_var_or_default("YABAI_SIGN_ID", "Apple Development")
@@ -32,16 +32,27 @@ rebuild-sa:
     make
     just build
 
+# Read-only safety check before starting a foreground qualification daemon.
+qualify-preflight:
+    python3 ./scripts/qualify_runtime.py preflight
+
+# Confirm the running daemon is this worktree's binary, not Homebrew yabai.
+qualify-running:
+    python3 ./scripts/qualify_runtime.py running
+
 # Run development daemon in the foreground (stop old daemon first).
-run:
+run: qualify-preflight
     ./bin/yabai --verbose --config {{quote(config_file)}}
 
-# Read-only checks against whichever yabai daemon is running.
-smoke:
-    ./bin/yabai --check-sa
+# Read-only daemon checks that do not require an injected Dock payload.
+smoke: qualify-running
     @printf 'Displays: '; ./bin/yabai -m query --displays | jq length
     @printf 'Spaces:   '; ./bin/yabai -m query --spaces | jq length
     @printf 'Windows:  '; ./bin/yabai -m query --windows | jq length
+
+# Additionally require a version-matching, healthy Dock scripting addition.
+smoke-sa: smoke
+    ./bin/yabai --check-sa
 
 # Refresh missing accessibility windows manually.
 refresh:

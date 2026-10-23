@@ -66,7 +66,23 @@ static void update_window_notifications(void)
 
     // Do not subscribe with a truncated list after allocation failure.
     if (complete) {
-        SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+        CGError err = SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+        if (err != kCGErrorSuccess) {
+            fprintf(stderr, "yabai: window notification subscription failed (count=%d, error=%d)\n",
+                    window_count, (int)err);
+        }
+
+        // The private API reportedly rejects 1024+ windows on some versions;
+        // the actual limit is unverified. Report the risk without silently
+        // dropping windows or changing subscription semantics.
+        static bool warned_large_subscription = false;
+        if (window_count >= 1024 && !warned_large_subscription) {
+            fprintf(stderr, "yabai: window notification subscription for %d windows is unverified; check event delivery\n",
+                    window_count);
+            warned_large_subscription = true;
+        } else if (window_count < 1024) {
+            warned_large_subscription = false;
+        }
     } else {
         fprintf(stderr, "yabai: unable to allocate window-notification list\n");
     }
@@ -84,7 +100,11 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
 
     if (wm->focused_window_id != window->id) {
-        if (ms->ffm_window_id != window->id) {
+        // Do not warp the cursor for transient PiP, dialog, or other ineligible focus.
+        // Both ends of a genuine window focus transition must be eligible.
+        bool entering_eligible = window->is_eligible;
+        bool leaving_eligible = !focused_window || focused_window->is_eligible;
+        if (ms->ffm_window_id != window->id && entering_eligible && leaving_eligible) {
             window_manager_center_mouse(wm, window);
         }
 
@@ -780,7 +800,10 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     }
 
     CGRect new_frame = window_ax_frame(window);
-    if (CGRectEqualToRect(new_frame, window->frame)) {
+    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
+    bool is_fullscreen = window_is_fullscreen(window);
+
+    if (was_fullscreen == is_fullscreen && CGRectEqualToRect(new_frame, window->frame)) {
         debug("%s:DEBOUNCED %s %d\n", __FUNCTION__, window->application->name, window->id);
         return;
     }
@@ -788,16 +811,13 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
     event_signal_push(SIGNAL_WINDOW_RESIZED, window);
 
-    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
-
-    bool is_fullscreen = window_is_fullscreen(window);
     if (is_fullscreen) {
         window_set_flag(window, WINDOW_FULLSCREEN);
     } else {
         window_clear_flag(window, WINDOW_FULLSCREEN);
     }
 
-    if (was_fullscreen != is_fullscreen) {
+    if (!was_fullscreen && is_fullscreen) {
         if (window_ax_can_move(window)) {
             window_set_flag(window, WINDOW_MOVABLE);
         } else {
@@ -815,12 +835,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
         if (window->subrole) CFRelease(window->subrole);
         window->subrole = window_ax_subrole(window);
-    }
 
-    bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
-    window->frame = new_frame;
+        window->frame = new_frame;
 
-    if (!was_fullscreen && is_fullscreen) {
         struct view *view = window_manager_find_managed_window(&g_window_manager, window);
         if (view) {
             space_manager_untile_window(view, window);
@@ -830,11 +847,57 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     } else if (was_fullscreen && !is_fullscreen) {
         window_manager_wait_for_native_fullscreen_transition(window);
 
-        if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
-            struct view *view = space_manager_tile_window_on_space(&g_space_manager, window, window_space(window->id));
-            window_manager_add_managed_window(&g_window_manager, window, view);
+        int attempts = 0;
+        while (!window_ax_can_move(window) && attempts++ < 15) {
+            usleep(20000);
+        }
+
+        if (window_ax_can_move(window)) {
+            window_set_flag(window, WINDOW_MOVABLE);
+        } else {
+            window_clear_flag(window, WINDOW_MOVABLE);
+        }
+
+        if (window_ax_can_resize(window)) {
+            window_set_flag(window, WINDOW_RESIZABLE);
+        } else {
+            window_clear_flag(window, WINDOW_RESIZABLE);
+        }
+
+        if (window->role) CFRelease(window->role);
+        window->role = window_ax_role(window);
+
+        if (window->subrole) CFRelease(window->subrole);
+        window->subrole = window_ax_subrole(window);
+
+        window->frame = window_ax_frame(window);
+
+        uint64_t sid = window_space(window->id);
+        if (!sid || !space_is_user(sid)) {
+            sid = space_manager_active_space();
+        }
+
+        if (window_manager_should_manage_window(window)) {
+            struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+            if (!view) {
+                view = space_manager_tile_window_on_space(&g_space_manager, window, sid);
+                window_manager_add_managed_window(&g_window_manager, window, view);
+            }
+
+            if (view && view->layout != VIEW_FLOAT) {
+                view_update(view);
+                if (space_is_visible(view->sid)) {
+                    window_node_flush(view->root);
+                    view_clear_flag(view, VIEW_IS_DIRTY);
+                } else {
+                    view_set_flag(view, VIEW_IS_DIRTY);
+                }
+            }
         }
     } else if (!was_fullscreen == !is_fullscreen) {
+        bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
+        window->frame = new_frame;
+
         if (g_mouse_state.current_action == MOUSE_MODE_MOVE && g_mouse_state.window == window) {
             g_mouse_state.window_frame.size = g_mouse_state.window->frame.size;
         }
@@ -1395,11 +1458,16 @@ static EVENT_HANDLER(MOUSE_MOVED)
     if (dt < 1250.0f) goto out;
 
     CGPoint point = CGEventGetLocation(context);
+
+    struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+    if (focused_window && window_check_rule_flag(focused_window, WINDOW_RULE_FFM) && !window_check_rule_flag(focused_window, WINDOW_RULE_FFM_VALUE)) goto out;
+
     struct window *window = window_manager_find_window_at_point(&g_window_manager, point);
 
     if (window) {
         if (window->id == g_window_manager.focused_window_id) goto out;
         if (!window_manager_is_window_eligible(window))       goto out;
+        if (window_check_rule_flag(window, WINDOW_RULE_FFM) && !window_check_rule_flag(window, WINDOW_RULE_FFM_VALUE)) goto out;
 
         if (g_window_manager.ffm_mode == FFM_AUTOFOCUS) {
 
