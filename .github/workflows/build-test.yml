@@ -1,0 +1,33 @@
+name: Build and unit tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - integration/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compiler and SDK
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-version
+
+      - name: Build Apple Silicon yabai and Dock payload
+        run: |
+          make clean
+          make install
+          lipo -verify_arch arm64 ./bin/yabai
+
+      - name: Run unit tests
+        run: make -C tests
