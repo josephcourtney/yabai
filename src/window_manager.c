@@ -2592,6 +2592,10 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
         struct window *window = window_manager_find_window(wm, window_list[i]);
         if (!window || !window_manager_should_manage_window(window)) continue;
 
+        // During a Mission Control drag, the window list can contain a window
+        // whose actual space association has not yet finished changing.
+        if (window_space(window->id) != view->sid) continue;
+
         struct view *existing_view = window_manager_find_managed_window(wm, window);
         if (existing_view && existing_view->layout != VIEW_FLOAT && existing_view != view) {
 
@@ -2651,6 +2655,10 @@ void window_manager_validate_and_check_for_windows_on_space(struct space_manager
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
+    // Recompute geometry for a view whose space was moved to another display.
+    // Re-homing its windows may not have dirtied the layout by itself.
+    if (space_is_visible(view->sid) && view_is_invalid(view)) view_update(view);
+
     if (space_is_visible(view->sid) && view_is_dirty(view)) {
         window_node_flush(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
@@ -2676,6 +2684,9 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
         uint64_t sid = display_space_id(did);
         for (int j = 0; j < space_count; ++j) {
             if (space_list[j] == sid) {
+                // A space can retain its ID while moving between displays.
+                // Force recalculation of its cached display-relative frame.
+                space_manager_mark_view_invalid(sm, sid);
                 window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
             } else {
                 space_manager_mark_view_invalid(sm, space_list[j]);
