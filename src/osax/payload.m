@@ -790,15 +790,17 @@ static void do_window_focus(char *message)
 {
     if (set_front_window_fp == 0) return;
 
-    int window_connection;
-    ProcessSerialNumber window_psn;
+    int window_connection = 0;
+    ProcessSerialNumber window_psn = {0};
 
     uint32_t wid;
     unpack(wid);
 
-    SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection);
-    // Resolve the process that owns the window, not the main SLS connection.
-    SLSGetConnectionPSN(window_connection, &window_psn);
+    // A stale window ID must not leave an uninitialized connection or PSN
+    // in the Dock-injected focus callback.
+    if (SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection) != kCGErrorSuccess ||
+        window_connection <= 0) return;
+    if (SLSGetConnectionPSN(window_connection, &window_psn) != kCGErrorSuccess) return;
 
     ((focus_window_call) set_front_window_fp)(window_psn, wid);
 }
