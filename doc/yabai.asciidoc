@@ -162,6 +162,16 @@ Global Settings
 *focus_follows_mouse* ['autofocus|autoraise|off']::
     Automatically focus the window under the mouse.
 
+*manage* ['<BOOL_SEL>']::
+    Automatically tile eligible windows. Default: 'on'. +
+    'off' allows rules with 'manage=on' and explicit 'window --toggle float' tiling while other windows remain floating. +
+    Changing this at runtime re-evaluates windows without explicit management overrides. +
+    A literal `yabai -m config manage off` in yabairc is detected before startup window import; computed or conditional shell commands are evaluated later and may briefly permit automatic tiling.
+
+*window_sublayer_auto* ['<BOOL_SEL>']::
+    Automatically place managed windows below floating windows when their layer is 'auto'. Default: 'on'. +
+    When 'off', automatically assigned sublayers remain normal rather than placing all floating windows above tiled windows.
+
 *display_arrangement_order* ['default|vertical|horizontal']::
     Specify how displays are ordered (determined by center point). +
     'default': Native macOS ordering. +
