@@ -678,6 +678,11 @@ ARGUMENT
 *mouse_follows_focus='<BOOL_SEL>'*::
     When focusing the window, put the mouse at its center. Overrides the global *mouse_follows_focus* setting.
 
+*focus_follows_mouse='<BOOL_SEL>'*::
+    Control whether mouse movement can transfer focus to or from this window when global *focus_follows_mouse* is enabled. +
+    Use 'off' to exclude applications such as virtual machines, games, or editors from automatic focus changes. +
+    The alias 'ffm' is supported.
+
 *sub-layer='<LAYER>'*::
     Window is ordered within the given stacking sub-layer. +
     The window will no longer be eligible for automatic change in sub-layer when managed/unmanaged. +
@@ -722,6 +727,7 @@ DATAFORMAT
     "manage": bool (optional),
     "sticky": bool (optional),
     "mouse_follows_focus": bool (optional),
+    "focus_follows_mouse": bool (optional),
     "sub-layer": string,
     "native-fullscreen": bool (optional),
     "grid": string,

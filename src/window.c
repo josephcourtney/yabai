@@ -1139,6 +1139,7 @@ void window_destroy(struct window *window)
     if (window->role) CFRelease(window->role);
     if (window->subrole) CFRelease(window->subrole);
     if (window->title) CFRelease(window->title);
-    CFRelease(window->ref);
+    // Role-only windows can have no AX reference (e.g. a desktop window).
+    if (window->ref) CFRelease(window->ref);
     free(window);
 }
