@@ -16,12 +16,16 @@ BINARY = Path("/tmp/yabai")
 
 @pytest.fixture
 def cycle_inputs():
-    space = {"id": 50, "index": 4, "type": "bsp", "has-focus": True}
-    window = {
-        "id": 77, "space": 4, "is-floating": False,
-        "layer": "normal", "sub-layer": "below", "sub-level": -20,
+    space = {
+        "id": 50, "index": 4, "type": "bsp", "has-focus": True,
+        "label": module.DISPOSABLE_SPACE_LABEL, "windows": [77, 78],
     }
-    return space, window
+    windows = [
+        {"id": wid, "space": 4, "is-floating": False, "app": "kitty",
+         "layer": "normal", "sub-layer": "below", "sub-level": -20}
+        for wid in (77, 78)
+    ]
+    return space, windows
 
 
 def test_flags_below_sublevel_on_float_space_only():
@@ -97,15 +101,15 @@ def _stub_cycle(monkeypatch, snapshots, *, command_error=None):
 
 
 def test_cycle_restores_original_layout_and_checks_layers(monkeypatch, cycle_inputs, capsys):
-    space, window = cycle_inputs
+    space, windows = cycle_inputs
     midspace = dict(space, type="float")
-    midwindow = dict(window, **{"sub-level": 0, "sub-layer": "normal"})
+    midwindows = [dict(w, **{"sub-level": 0, "sub-layer": "normal"}) for w in windows]
     calls, preflight = _stub_cycle(monkeypatch, [
-        ([space], [window]),
-        ([midspace], [midwindow]),
-        ([space], [window]),
+        ([space], windows),
+        ([midspace], midwindows),
+        ([space], windows),
     ])
-    assert module.qualify_cycle(BINARY, 4, 1.0) == 0
+    assert module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78]) == 0
     assert len(preflight) == 1
     assert calls == [
         (BINARY, "--check-sa"),
@@ -116,32 +120,70 @@ def test_cycle_restores_original_layout_and_checks_layers(monkeypatch, cycle_inp
 
 
 def test_exception_during_float_probe_still_restores(monkeypatch, cycle_inputs):
-    space, window = cycle_inputs
+    space, windows = cycle_inputs
     calls, _ = _stub_cycle(monkeypatch, [
-        ([space], [window]), ValueError("bad query"),
+        ([space], windows), ValueError("bad query"),
     ])
     with pytest.raises(ValueError, match="bad query"):
-        module.qualify_cycle(BINARY, 4, 1.0)
+        module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78])
     assert calls[-1] == (BINARY, "-m", "space", "4", "--layout", "bsp")
 
 
 def test_float_command_failure_still_attempts_restoration(monkeypatch, cycle_inputs):
-    space, window = cycle_inputs
+    space, windows = cycle_inputs
     calls, _ = _stub_cycle(
-        monkeypatch, [([space], [window])],
+        monkeypatch, [([space], windows)],
         command_error=RuntimeError("IPC interrupted"),
     )
     with pytest.raises(RuntimeError, match="IPC interrupted"):
-        module.qualify_cycle(BINARY, 4, 1.0)
+        module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78])
     assert calls[-1] == (BINARY, "-m", "space", "4", "--layout", "bsp")
 
 
 def test_refuses_nonfocused_space_without_mutating(monkeypatch, cycle_inputs):
-    space, window = cycle_inputs
+    space, windows = cycle_inputs
     space = dict(space, **{"has-focus": False})
-    calls, _ = _stub_cycle(monkeypatch, [([space], [window])])
+    calls, _ = _stub_cycle(monkeypatch, [([space], windows)])
     with pytest.raises(RuntimeError, match="active"):
-        module.qualify_cycle(BINARY, 4, 1.0)
+        module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78])
+    assert calls == [(BINARY, "--check-sa")]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        ({"id": 51}, "Space ID"),
+        ({"label": ""}, "disposable qualification label"),
+        ({"windows": [77, 78, 999]}, "unexpected or missing windows"),
+        ({"windows": [77]}, "unexpected or missing windows"),
+        ({"type": "float"}, "BSP or stack"),
+    ],
+)
+def test_refuses_non_disposable_space(monkeypatch, cycle_inputs, mutation, match):
+    space, windows = cycle_inputs
+    space = dict(space, **mutation)
+    calls, _ = _stub_cycle(monkeypatch, [([space], windows)])
+    with pytest.raises(RuntimeError, match=match):
+        module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78])
+    assert calls == [(BINARY, "--check-sa")]
+
+
+@pytest.mark.parametrize("window_ids", [[77, 77], [77, 79]])
+def test_refuses_incorrect_window_ids(monkeypatch, cycle_inputs, window_ids):
+    space, windows = cycle_inputs
+    calls, _ = _stub_cycle(monkeypatch, [([space], windows)])
+    with pytest.raises(RuntimeError):
+        module.qualify_cycle(BINARY, 4, 1.0, 50, window_ids)
+    assert calls == [(BINARY, "--check-sa")]
+
+
+def test_refuses_non_kitty_window(monkeypatch, cycle_inputs):
+    space, windows = cycle_inputs
+    windows = [dict(w) for w in windows]
+    windows[0]["app"] = "Zen"
+    calls, _ = _stub_cycle(monkeypatch, [([space], windows)])
+    with pytest.raises(RuntimeError, match="Kitty"):
+        module.qualify_cycle(BINARY, 4, 1.0, 50, [77, 78])
     assert calls == [(BINARY, "--check-sa")]
 
 
