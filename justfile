@@ -9,6 +9,10 @@ qualification_config := justfile_directory() + "/scripts/qualification.yabairc"
 default:
     @just --list
 
+# Run the Python qualification suite with isolated pytest via uv.
+test-python:
+    uv run --no-project --isolated --with-requirements requirements-test.txt python -m pytest -q tests
+
 # Validate a patch without modifying files.
 check-patch file:
     git apply --check --index {{quote(file)}}
