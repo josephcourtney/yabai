@@ -22,9 +22,14 @@ loaded, nor does it guarantee visual frontmost order in every application.
 - Scroot absent; only the qualified foreground yabai daemon was running.
 - Dock scripting addition already loaded and healthy: payload v2.1.31.
   No installation, Dock restart, or SIP modifications were needed.
-- Local `just test-python`: **36 pytest cases passed**. A completed native
-  `make -C tests` run for the final combined integration revision has not
-  been supplied; do not claim that it passed.
+- Local qualification on the original runtime-tested revision:
+  **36 pytest cases passed**.
+- Final combined integration branch `d567fab` (2026-11-02):
+  `just test-local` **passed 36 pytest cases and 2 native C tests**.
+  `just build` compiled the arm64e Dock payload and arm64 yabai,
+  validated its code signature, and recorded a clean build stamp with
+  binary SHA-256 prefix `9d5e86748b39cfd9`. The native test compilation
+  emitted five nonfatal macOS 15+ `CVDisplayLink` deprecation warnings.
 - A dedicated, active macOS Space (index 5, stable ID 366) was labeled
   `yabai-layer-qualification` and contained exactly two managed Kitty
   windows, IDs 8273 and 8299.
