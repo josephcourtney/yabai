@@ -13,6 +13,41 @@ This branch is based on `compat/macos-27.0.1`; keep `master` untouched until run
 
 The branch retains the existing `--check-sa`, manual/automatic window reconciliation, macOS 27 compatibility, safe notification-buffer growth, and explicit tiling patches.
 
+## November 2, 2026 integration decision
+
+This branch's correctness changes have **partial local macOS 27 acceptance**. The
+October 23 macOS tests exercised eligible focus-following and Finder exclusion,
+basic BSP close/reflow, zoom/unzoom, native and windowed fullscreen
+entry/exit, and normal window reconciliation. The supplied logs support those
+specific cases, **not** every possible window, display, or Dock state. Native
+fullscreen preserved window membership and usable tiling but did **not**
+preserve the original pairwise tile ordering.
+
+The independent sublayer defect found during these tests is addressed in
+[PR #6](https://github.com/josephcourtney/yabai/pull/6), which must be
+integrated **after** this correctness batch. At source revision `82ce60b`,
+the user independently ran 36 pytest cases successfully and completed a
+guarded, SA-qualified, macOS 27 BSP→float→BSP cycle on a disposable Space.
+Both Kitty test windows transitioned from sublevel -20 to 0 and back to -20.
+This verifies the *transition* repair, not retroactive repair of already
+stranded layers.
+
+**Policy:** Do not require or create GitHub Actions workflows. The fork uses
+local Apple Silicon builds and code-signing, pytest, the native C test
+harness, and strictly scoped manual macOS regression tests. A completed native
+C-suite run at the final combined revision has **not** been supplied yet;
+do not claim it passed. This merge does not imply complete regression coverage.
+
+**Remaining intentionally unqualified cases:** PiP/transient dialog
+focus eligibility across sleep/wake; Mission Control cross-display moves;
+external-bar padding in every geometry mode; deliberately missed AX creation
+events; Dock-restart resilience; and the undocumented notification subscription
+limit at or above 1,024 windows. The `SYSTEM_WOKE` handler does not currently
+recheck `is_eligible` before an MFF warp. That is a source-level concern,
+not a demonstrated runtime failure. Verify before claiming it resolved.
+
+
+
 ## Runtime qualification: safety and branch identity
 
 During the 2026-10-22 desktop qualification session, mouse clicks and application activation became unreliable. The accompanying WindowServer `_CGXPackagesSetWindowConstraints: Invalid window` error rate dropped from 91 to 6 occurrences per 30 seconds after **Scroot** exited (with the yabai daemon already stopped). This implicates Scroot in the error flood, but does **not** establish that Scroot caused the input failure. Keep Scroot closed during further yabai testing. No yabai PR is runtime-qualified on the strength of this observation.
@@ -33,7 +68,14 @@ just qualify-preflight
 
 `just qualify-preflight` is read-only. It fails if a Scroot process is detected or any yabai daemon is still running. It also prints HEAD and the baseline 30-second WindowServer error count; it does not change Dock, SIP, launchd, or configuration.
 
-Run `just run` in Terminal 1; leave it in the foreground. In Terminal 2:
+**Caution:** on this baseline, `just run` executes the user's
+`~/.config/yabai/yabairc`, including any Dock-restart hooks or shell
+commands. It is not an isolated test configuration. PR #6 adds a default
+inert qualification config and an explicit `just run-user-config` opt-in.
+Inspect the configuration and use only a controlled test environment.
+
+Run `just run` in Terminal 1 only when those hooks are acceptable; leave it
+in the foreground. In Terminal 2:
 
 ```bash
 cd ~/code/yabai-qualification
@@ -92,7 +134,9 @@ measured before changing overflow behavior.
 4. Comparative macOS 27 SIP-on space switching from Christian-SC26 and wxwern with Dock-pattern validation.
 5. jpatrolla animation/focus-ring architecture, kept behind opt-in flags.
 
-**Validation status:** GitHub Actions builds the Apple Silicon executable and runs
-existing tests using a macOS 15 runner. These tests cannot validate the real
-WindowServer, Dock injection, or macOS 27 behavior. Local macOS runtime testing
-is mandatory before merging.
+**Validation status (2026-11-02):** GitHub Actions was removed by request.
+Local manual results are recorded above with scope and limitations. The
+required final native C-suite run and remaining edge-case investigations are
+tracked as follow-up qualification, not silently represented as passed tests.
+PR #6's validated Space-layer transition should be integrated on top of this
+batch before relying on BSP→float sublayer restoration.
