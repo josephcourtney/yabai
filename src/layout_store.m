@@ -1,4 +1,5 @@
 #include "layout_store.h"
+#include "layout_match.h"
 
 static NSString *layout_store_resolve_path(const char *name_or_path, uint64_t sid)
 {
@@ -227,84 +228,114 @@ bool layout_store_dump(uint64_t sid, FILE *rsp, char *err_msg, size_t err_size)
     }
 }
 
-static struct window_node *layout_store_reconstruct_node(NSDictionary *dict, struct window **avail, bool *used, int avail_count, struct window_node *parent, enum window_node_child child)
+/* These nodes have not been registered with the window manager: the normal
+ * window_node_destroy() would remove already-managed live windows. */
+static void layout_store_free_detached_node(struct window_node *node)
 {
-    if (!dict || ![dict isKindOfClass:[NSDictionary class]]) return NULL;
+    if (!node) return;
+    layout_store_free_detached_node(node->left);
+    layout_store_free_detached_node(node->right);
+    free(node);
+}
+
+static void layout_store_snapshot_keys(struct window **windows,
+                                       struct layout_match_key *keys, int count)
+{
+    for (int i = 0; i < count; ++i) {
+        keys[i].app = windows[i]->application ? windows[i]->application->name : NULL;
+        keys[i].title = window_title_ts(windows[i]);
+    }
+}
+
+static struct window_node *layout_store_reconstruct_node(
+    NSDictionary *dict, struct window **avail,
+    const struct layout_match_key *keys, bool *used, int avail_count,
+    struct window_node *parent, enum window_node_child child,
+    char *err_msg, size_t err_size)
+{
+    if (!dict || ![dict isKindOfClass:[NSDictionary class]]) {
+        snprintf(err_msg, err_size, "invalid or missing layout tree node");
+        return NULL;
+    }
 
     NSString *type = dict[@"type"];
     if ([type isEqualToString:@"leaf"]) {
-        struct window *matched = NULL;
         NSArray *apps = dict[@"apps"];
-        if (apps && [apps isKindOfClass:[NSArray class]]) {
-            for (NSString *desired_app in apps) {
-                for (int i = 0; i < avail_count; ++i) {
-                    if (!used[i] && avail[i]->application && avail[i]->application->name) {
-                        if ([desired_app isEqualToString:[NSString stringWithUTF8String:avail[i]->application->name]]) {
-                            matched = avail[i];
-                            used[i] = true;
-                            break;
-                        }
-                    }
-                }
-                if (matched) break;
-            }
+        NSArray *titles = dict[@"titles"];
+        if (![apps isKindOfClass:[NSArray class]] ||
+            ![titles isKindOfClass:[NSArray class]] ||
+            [apps count] != 1 || [titles count] != 1 ||
+            ![apps[0] isKindOfClass:[NSString class]] ||
+            ![titles[0] isKindOfClass:[NSString class]]) {
+            snprintf(err_msg, err_size, "layout leaf requires exactly one app/title pair; stacked or legacy leaves cannot be safely restored");
+            return NULL;
         }
 
-        if (!matched) {
-            for (int i = 0; i < avail_count; ++i) {
-                if (!used[i]) {
-                    matched = avail[i];
-                    used[i] = true;
-                    break;
-                }
-            }
+        const char *app = [apps[0] UTF8String];
+        const char *title = [titles[0] UTF8String];
+        size_t index = 0;
+        enum layout_match_result status = layout_match_unique(
+            app, title, keys, used, (size_t) avail_count, &index);
+        if (status != LAYOUT_MATCH_OK) {
+            snprintf(err_msg, err_size, "cannot match layout window app='%.80s' title='%.80s': %s",
+                     app, title,
+                     status == LAYOUT_MATCH_AMBIGUOUS ? "ambiguous duplicate windows" :
+                     status == LAYOUT_MATCH_ALREADY_USED ? "window referenced more than once" :
+                     status == LAYOUT_MATCH_MISSING ? "no exact app/title match" : "invalid key");
+            return NULL;
         }
 
-        if (!matched) return NULL;
-
-        struct window_node *leaf = malloc(sizeof(struct window_node));
-        memset(leaf, 0, sizeof(struct window_node));
+        used[index] = true;
+        struct window_node *leaf = calloc(1, sizeof(struct window_node));
+        if (!leaf) {
+            snprintf(err_msg, err_size, "out of memory reconstructing layout leaf");
+            return NULL;
+        }
         leaf->parent = parent;
         leaf->child = child;
         leaf->ratio = 0.5f;
-        leaf->window_list[0] = matched->id;
-        leaf->window_order[0] = matched->id;
+        leaf->window_list[0] = avail[index]->id;
+        leaf->window_order[0] = avail[index]->id;
         leaf->window_count = 1;
         return leaf;
-    } else if ([type isEqualToString:@"branch"]) {
-        struct window_node *branch = malloc(sizeof(struct window_node));
-        memset(branch, 0, sizeof(struct window_node));
+    }
+
+    if ([type isEqualToString:@"branch"]) {
+        NSString *split = dict[@"split"];
+        if (![split isEqualToString:@"horizontal"] && ![split isEqualToString:@"vertical"]) {
+            snprintf(err_msg, err_size, "invalid branch split");
+            return NULL;
+        }
+
+        struct window_node *branch = calloc(1, sizeof(struct window_node));
+        if (!branch) {
+            snprintf(err_msg, err_size, "out of memory reconstructing layout branch");
+            return NULL;
+        }
         branch->parent = parent;
         branch->child = child;
-        branch->split = [dict[@"split"] isEqualToString:@"horizontal"] ? SPLIT_X : SPLIT_Y;
+        branch->split = [split isEqualToString:@"horizontal"] ? SPLIT_X : SPLIT_Y;
         branch->ratio = [dict[@"ratio"] floatValue];
         if (branch->ratio < 0.05f || branch->ratio > 0.95f) branch->ratio = 0.5f;
 
-        branch->left = layout_store_reconstruct_node(dict[@"left"], avail, used, avail_count, branch, CHILD_FIRST);
-        branch->right = layout_store_reconstruct_node(dict[@"right"], avail, used, avail_count, branch, CHILD_SECOND);
-
-        if (!branch->left && !branch->right) {
-            free(branch);
+        branch->left = layout_store_reconstruct_node(
+            dict[@"left"], avail, keys, used, avail_count, branch, CHILD_FIRST,
+            err_msg, err_size);
+        if (!branch->left) {
+            layout_store_free_detached_node(branch);
             return NULL;
         }
-        if (!branch->left) {
-            struct window_node *r = branch->right;
-            r->parent = parent;
-            r->child = child;
-            free(branch);
-            return r;
-        }
+        branch->right = layout_store_reconstruct_node(
+            dict[@"right"], avail, keys, used, avail_count, branch, CHILD_SECOND,
+            err_msg, err_size);
         if (!branch->right) {
-            struct window_node *l = branch->left;
-            l->parent = parent;
-            l->child = child;
-            free(branch);
-            return l;
+            layout_store_free_detached_node(branch);
+            return NULL;
         }
-
         return branch;
     }
 
+    snprintf(err_msg, err_size, "unknown layout node type");
     return NULL;
 }
 
@@ -345,6 +376,7 @@ bool layout_store_restore(uint64_t sid, const char *name_or_path, char *out_path
         uint32_t *raw_list = space_window_list(sid, &total_windows, false);
         struct window *avail[256];
         bool used[256] = {false};
+        struct layout_match_key keys[256];
         int avail_count = 0;
 
         for (int i = 0; i < total_windows && avail_count < 256; ++i) {
@@ -359,11 +391,10 @@ bool layout_store_restore(uint64_t sid, const char *name_or_path, char *out_path
             return false;
         }
 
-        struct window_node *new_root = layout_store_reconstruct_node(tree_dict, avail, used, avail_count, NULL, CHILD_NONE);
-        if (!new_root) {
-            snprintf(err_msg, err_size, "failed to reconstruct tree from '%s'", [path UTF8String]);
-            return false;
-        }
+        layout_store_snapshot_keys(avail, keys, avail_count);
+        struct window_node *new_root = layout_store_reconstruct_node(
+            tree_dict, avail, keys, used, avail_count, NULL, CHILD_NONE, err_msg, err_size);
+        if (!new_root) return false;
 
         view->layout = VIEW_BSP;
 
