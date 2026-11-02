@@ -26,6 +26,7 @@ build:
     codesign --verify --verbose=2 ./bin/yabai
     @./bin/yabai --version
     @lipo -archs ./bin/yabai
+    python3 ./scripts/qualification_build_stamp.py write
 
 # Clean/regenerate embedded scripting addition, then optimize and sign.
 rebuild-sa:
