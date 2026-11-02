@@ -13,6 +13,13 @@ default:
 test-python:
     uv run --no-project --isolated --with-requirements requirements-test.txt python -m pytest -q tests
 
+# Run the existing native C unit suite locally.
+test-c:
+    make -C tests
+
+# Full offline/local unit-test gate (no GitHub Actions).
+test-local: test-python test-c
+
 # Validate a patch without modifying files.
 check-patch file:
     git apply --check --index {{quote(file)}}
