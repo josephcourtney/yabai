@@ -133,6 +133,23 @@ class MutationSafetyTests(unittest.TestCase):
 
 
 
+class IsolatedStartupTests(unittest.TestCase):
+    def test_qualification_config_contains_no_executable_commands(self):
+        config = (SCRIPT.parents[1] / "scripts" / "qualification.yabairc").read_text()
+        executable_lines = [
+            line for line in config.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(executable_lines, [])
+
+    def test_just_run_does_not_load_personal_config(self):
+        justfile = (SCRIPT.parents[1] / "justfile").read_text()
+        block = justfile.split("\nrun: qualify-preflight\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("qualification_config", block)
+        self.assertNotIn("config_file", block)
+        self.assertIn("run-user-config: qualify-preflight", justfile)
+
+
 class SourceWiringTests(unittest.TestCase):
     def test_restore_precedes_tree_clear(self):
         source = (SCRIPT.parents[1] / "src" / "space_manager.c").read_text()
