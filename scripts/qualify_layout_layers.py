@@ -97,8 +97,10 @@ def qualify_cycle(binary, space_index, pause):
     float_windows = []
     did_change = False
     try:
-        command(binary, "-m", "space", str(space_index), "--layout", "float")
+        # An IPC failure may occur after the daemon applies the transition.
+        # Attempt restoration even if the request itself reports an error.
         did_change = True
+        command(binary, "-m", "space", str(space_index), "--layout", "float")
         time.sleep(pause)
         mid_spaces, float_windows = snapshot(binary)
         current = next((s for s in mid_spaces if s["id"] == space["id"]), None)
