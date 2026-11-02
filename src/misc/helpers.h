@@ -486,6 +486,45 @@ static void exec_config_file(char *config_file, int config_file_size)
     }
 }
 
+// Best-effort bootstrap for a literal 'yabai -m config manage on|off' in yabairc.
+// Run before importing existing windows, because the config shell runs async.
+// This is not a shell interpreter: computed/conditional settings take effect
+// once yabairc actually runs, and may briefly tile windows at startup.
+static bool read_config_manage_setting(char *config_file, int config_file_size, bool *manage)
+{
+    if (config_file[0] == '\0' && !get_config_file("yabairc", config_file, config_file_size)) return false;
+    if (!file_exists(config_file)) return false;
+
+    FILE *handle = fopen(config_file, "r");
+    if (!handle) return false;
+
+    bool found = false;
+    char line[4096];
+    while (fgets(line, sizeof(line), handle)) {
+        char *comment = strchr(line, '#');
+        if (comment) *comment = '\0';
+
+        bool seen_config = false, seen_manage = false;
+        char *save;
+        for (char *token = strtok_r(line, " \t\r\n", &save);
+             token;
+             token = strtok_r(NULL, " \t\r\n", &save)) {
+            if (!seen_config) {
+                seen_config = string_equals(token, "config");
+            } else if (!seen_manage) {
+                if (string_equals(token, "manage")) seen_manage = true;
+                else break;
+            } else {
+                if (string_equals(token, "off")) { *manage = false; found = true; }
+                else if (string_equals(token, "on")) { *manage = true; found = true; }
+                break;
+            }
+        }
+    }
+    fclose(handle);
+    return found;
+}
+
 static inline bool ax_privilege(void)
 {
     const void *keys[] = { kAXTrustedCheckOptionPrompt };
