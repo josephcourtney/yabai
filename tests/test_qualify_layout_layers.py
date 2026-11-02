@@ -103,6 +103,21 @@ class MutationSafetyTests(unittest.TestCase):
                 mock.call(Path("/tmp/yabai"), "-m", "space", "4", "--layout", "bsp"),
             )
 
+    def test_float_command_failure_still_attempts_restoration(self):
+        with (
+            mock.patch.object(module.subprocess, "run"),
+            mock.patch.object(module, "command", side_effect=[
+                "", RuntimeError("IPC interrupted"), "",
+            ]) as command,
+            mock.patch.object(module, "snapshot", return_value=([self.space], [self.window])),
+            mock.patch.object(module.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "IPC interrupted"):
+                module.qualify_cycle(Path("/tmp/yabai"), 4, 1.0)
+            self.assertEqual(command.call_args_list[-1],
+                             mock.call(Path("/tmp/yabai"), "-m", "space", "4",
+                                       "--layout", "bsp"))
+
     def test_refuses_nonfocused_space_without_mutating(self):
         other = dict(self.space, **{"has-focus": False})
         with (
@@ -115,6 +130,32 @@ class MutationSafetyTests(unittest.TestCase):
             self.assertEqual(command.call_args_list, [
                 mock.call(Path("/tmp/yabai"), "--check-sa"),
             ])
+
+
+
+class SourceWiringTests(unittest.TestCase):
+    def test_restore_precedes_tree_clear(self):
+        source = (SCRIPT.parents[0] / "src" / "space_manager.c").read_text()
+        body = source.split("void space_manager_set_layout_for_space(", 1)[1].split("\n}\n", 1)[0]
+        self.assertLess(
+            body.index("space_manager_restore_layers_before_float(view)"),
+            body.index("view_clear(view)"),
+        )
+
+    def test_global_and_scoped_config_use_shared_setter(self):
+        space_src = (SCRIPT.parents[0] / "src" / "space_manager.c").read_text()
+        message_src = (SCRIPT.parents[0] / "src" / "message.c").read_text()
+        self.assertIn(
+            "space_manager_set_layout_for_space(sm, view->sid, layout)",
+            space_src,
+        )
+        for layout in ("VIEW_BSP", "VIEW_STACK", "VIEW_FLOAT"):
+            self.assertIn(
+                "space_manager_set_layout_for_space(&g_space_manager, sel_sid, " +
+                layout + ")",
+                message_src,
+            )
+
 
 
 if __name__ == "__main__":
