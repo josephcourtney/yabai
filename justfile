@@ -3,6 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 sign_id := env_var_or_default("YABAI_SIGN_ID", "Apple Development")
 config_file := env_var_or_default("YABAI_CONFIG", env_var("HOME") + "/.config/yabai/yabairc")
+qualification_config := justfile_directory() + "/scripts/qualification.yabairc"
 
 # List available recipes.
 default:
@@ -40,8 +41,15 @@ qualify-preflight:
 qualify-running:
     python3 ./scripts/qualify_runtime.py running
 
-# Run development daemon in the foreground (stop old daemon first).
+# Default qualification daemon uses a deliberately inert startup config.
+# The user's yabairc can register Dock hooks or launch external processes.
 run: qualify-preflight
+    ./bin/yabai --verbose --config {{quote(qualification_config)}}
+
+# Explicit opt-in: execute normal user yabairc, including arbitrary hooks.
+# Not suitable for isolated regression qualification.
+run-user-config: qualify-preflight
+    @printf '%s\n' 'WARNING: executing user yabairc; Dock and topology hooks may run' >&2
     ./bin/yabai --verbose --config {{quote(config_file)}}
 
 # Read-only daemon checks that do not require an injected Dock payload.
