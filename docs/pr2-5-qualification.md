@@ -106,6 +106,34 @@ Capture exact commit, build stamp, command outputs, window IDs, Space IDs,
 and before/after JSON queries. `docs/space-layer-qualification.md` explains
 the isolated layered-window test.
 
+## PR #4 strict window identity (unqualified source fix)
+
+After the initial 2026-11-02 macOS runtime smoke tests (recorded as PR
+comments), subsequent source review revealed that app-only restoration could
+arbitrarily exchange multiple Kitty/Zen windows. The staged corrective
+implementation now matches the **exact application + saved title** of every
+restored window, refuses missing or duplicate matches, and rejects stacked
+leaf layouts that cannot be reconstructed unambiguously. It does not silently
+substitute an arbitrary window. Session restore builds and validates the
+full assignment plan before moving windows and refuses partial/incomplete
+window sets. These source changes invalidate the earlier signed build
+provenance; none of the earlier runtime results qualify the new revision.
+
+**Limitations:** Titles can change; two windows with the same app and title
+cannot be distinguished reliably and will be rejected. A missing or ambiguous
+window is an error, not a best-effort restore. Multi-Space restoration remains
+**nontransactional** after validation if the operating system rejects a move;
+layout/layer-transition behavior still requires isolated runtime checks.
+Do not use `--load-session` on ordinary work Spaces.
+
+Rebuild and run the native matcher regression via `just test-local`, then
+`just build` and `just qualify-preflight` with the old foreground daemon
+stopped. Confirm signed provenance and test `--load-layout` **only** on a
+verified disposable BSP Space with unique Kitty titles. Snapshot before/after
+window IDs, positions, tree, and layers. Verify a deliberate duplicate-title
+case is rejected without mutating frames. Test `--load-session` only in an
+isolated macOS login session or VM after additional review.
+
 ## Acceptance policy
 
 Only after Gate A succeeds can Gate B begin. The mutating Gate C requires a
