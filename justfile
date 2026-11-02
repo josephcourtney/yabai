@@ -80,10 +80,11 @@ auto state="on":
 qualify-layers: qualify-running
     python3 ./scripts/qualify_layout_layers.py
 
-# Mutates ONLY the specified active disposable Space; requires a working Dock SA.
-# This cycles the layout bsp/stack -> float -> original and can reorder windows.
-qualify-layer-cycle space: qualify-running
-    python3 ./scripts/qualify_layout_layers.py --cycle-index {{quote(space)}} --allow-layout-mutation
+# Mutates ONLY an active BSP/stack Space labeled yabai-layer-qualification,
+# with EXACTLY the two specified managed Kitty test windows. It can reorder them.
+# The persistent Space ID prevents silent retargeting after macOS reindexes Spaces.
+qualify-layer-cycle space space_id kitty1 kitty2: qualify-running
+    python3 ./scripts/qualify_layout_layers.py --cycle-index {{quote(space)}} --expected-space-id {{quote(space_id)}} --test-window-ids {{quote(kitty1)}} {{quote(kitty2)}} --allow-layout-mutation
 
 # Stop the existing launchd service explicitly.
 stop-installed:
