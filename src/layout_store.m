@@ -96,23 +96,6 @@ static NSDictionary *layout_store_serialize_node(struct window_node *node)
     return dict;
 }
 
-static void layout_store_collect_tree_apps(NSDictionary *node_dict, NSMutableArray *apps)
-{
-    if (!node_dict || ![node_dict isKindOfClass:[NSDictionary class]]) return;
-    NSString *type = node_dict[@"type"];
-    if ([type isEqualToString:@"leaf"]) {
-        NSArray *node_apps = node_dict[@"apps"];
-        if (node_apps && [node_apps isKindOfClass:[NSArray class]]) {
-            for (NSString *a in node_apps) {
-                [apps addObject:a];
-            }
-        }
-    } else {
-        layout_store_collect_tree_apps(node_dict[@"left"], apps);
-        layout_store_collect_tree_apps(node_dict[@"right"], apps);
-    }
-}
-
 bool layout_store_save(uint64_t sid, const char *name_or_path, char *out_path, size_t out_path_size, char *err_msg, size_t err_size)
 {
     @autoreleasepool {
