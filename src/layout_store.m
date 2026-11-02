@@ -577,8 +577,8 @@ bool layout_store_restore_session(const char *name_or_path, char *out_path, size
         int display_count = 0;
         uint32_t *display_list = display_manager_active_display_list(&display_count);
         struct window *all_windows[512];
-        uint64_t window_current_sid[512];
-        bool window_used[512] = {false};
+        struct layout_match_key all_keys[512];
+        bool globally_used[512] = {false};
         int all_count = 0;
 
         for (int i = 0; i < display_count && all_count < 512; ++i) {
@@ -596,55 +596,119 @@ bool layout_store_restore_session(const char *name_or_path, char *out_path, size
                     struct window *w = window_manager_find_window(&g_window_manager, w_list[k]);
                     if (w && window_manager_is_window_eligible(w) && !window_check_flag(w, WINDOW_FLOAT)) {
                         all_windows[all_count] = w;
-                        window_current_sid[all_count] = sid;
                         all_count++;
                     }
                 }
             }
         }
 
+        /* Plan and validate EVERY space before moving a single window.
+         * A duplicate app/title is not a stable identity and must fail closed.
+         * Restoration remains nontransactional if the OS rejects a later move. */
+        layout_store_snapshot_keys(all_windows, all_keys, all_count);
+        NSMutableDictionary *planned_windows = [NSMutableDictionary dictionary];
         for (NSDictionary *s_dict in spaces_arr) {
-            if (![s_dict isKindOfClass:[NSDictionary class]]) continue;
-
+            if (![s_dict isKindOfClass:[NSDictionary class]]) {
+                snprintf(err_msg, err_size, "invalid space entry in session");
+                return false;
+            }
             int mci = [s_dict[@"index"] intValue];
-            if (mci <= 0) continue;
+            uint64_t sid = mci > 0 ? space_manager_mission_control_space(mci) : 0;
+            if (!sid || !space_manager_find_view(&g_space_manager, sid) ||
+                planned_windows[@(mci)]) {
+                snprintf(err_msg, err_size, "missing or duplicate target Space index %d", mci);
+                return false;
+            }
 
+            NSArray *descriptors = s_dict[@"windows"];
+            if (![descriptors isKindOfClass:[NSArray class]] || [descriptors count] > 256) {
+                snprintf(err_msg, err_size, "Space %d has invalid window descriptors", mci);
+                return false;
+            }
+
+            NSString *layout_str = s_dict[@"layout"];
+            if (![layout_str isEqualToString:@"bsp"] &&
+                ![layout_str isEqualToString:@"stack"] &&
+                ![layout_str isEqualToString:@"float"]) {
+                snprintf(err_msg, err_size, "Space %d has unsupported layout", mci);
+                return false;
+            }
+
+            NSMutableArray *indexes = [NSMutableArray array];
+            for (NSDictionary *w_dict in descriptors) {
+                if (![w_dict isKindOfClass:[NSDictionary class]] ||
+                    ![w_dict[@"app"] isKindOfClass:[NSString class]] ||
+                    ![w_dict[@"title"] isKindOfClass:[NSString class]]) {
+                    snprintf(err_msg, err_size, "Space %d has invalid app/title descriptor", mci);
+                    return false;
+                }
+
+                const char *app = [w_dict[@"app"] UTF8String];
+                const char *title = [w_dict[@"title"] UTF8String];
+                size_t index = 0;
+                enum layout_match_result status = layout_match_unique(
+                    app, title, all_keys, globally_used, (size_t) all_count, &index);
+                if (status != LAYOUT_MATCH_OK) {
+                    snprintf(err_msg, err_size,
+                             "Space %d cannot match window app='%.80s' title='%.80s': %s",
+                             mci, app, title,
+                             status == LAYOUT_MATCH_AMBIGUOUS ? "ambiguous duplicates" :
+                             status == LAYOUT_MATCH_ALREADY_USED ? "window reused" :
+                             status == LAYOUT_MATCH_MISSING ? "no exact match" : "invalid key");
+                    return false;
+                }
+                globally_used[index] = true;
+                [indexes addObject:@((int) index)];
+            }
+            planned_windows[@(mci)] = indexes;
+
+            /* Validate the saved BSP tree against the planned occupants,
+             * including title identity and leaf cardinality, before changes. */
+            NSDictionary *tree_dict = s_dict[@"tree"];
+            if ([layout_str isEqualToString:@"bsp"] && tree_dict) {
+                if (![tree_dict isKindOfClass:[NSDictionary class]]) {
+                    snprintf(err_msg, err_size, "Space %d has invalid BSP tree", mci);
+                    return false;
+                }
+                struct window *planned[256];
+                struct layout_match_key keys[256];
+                bool used[256] = {false};
+                for (NSUInteger j = 0; j < [indexes count]; ++j) {
+                    int k = [indexes[j] intValue];
+                    planned[j] = all_windows[k];
+                    keys[j] = all_keys[k];
+                }
+                struct window_node *check = layout_store_reconstruct_node(
+                    tree_dict, planned, keys, used, (int) [indexes count],
+                    NULL, CHILD_NONE, err_msg, err_size);
+                if (!check) return false;
+                layout_store_free_detached_node(check);
+            }
+        }
+
+        /* Refuse a partial saved-window set: unplanned eligible windows must
+         * not be silently moved or abandoned in an old layout tree. */
+        for (int i = 0; i < all_count; ++i) {
+            if (!globally_used[i]) {
+                snprintf(err_msg, err_size, "session does not describe every eligible live window; refusing partial restore");
+                return false;
+            }
+        }
+
+        for (NSDictionary *s_dict in spaces_arr) {
+            int mci = [s_dict[@"index"] intValue];
             uint64_t sid = space_manager_mission_control_space(mci);
-            if (!sid) continue;
-
             struct view *view = space_manager_find_view(&g_space_manager, sid);
-            if (!view) continue;
+            NSArray *indexes = planned_windows[@(mci)];
 
             struct window *space_windows[256];
+            struct layout_match_key space_keys[256];
             bool space_used[256] = {false};
-            int space_win_count = 0;
-
-            NSMutableArray *expected_apps = [NSMutableArray array];
-            if (s_dict[@"windows"] && [s_dict[@"windows"] isKindOfClass:[NSArray class]]) {
-                for (NSDictionary *w_dict in s_dict[@"windows"]) {
-                    if (w_dict[@"app"]) [expected_apps addObject:w_dict[@"app"]];
-                }
-            } else if (s_dict[@"tree"] && [s_dict[@"tree"] isKindOfClass:[NSDictionary class]]) {
-                layout_store_collect_tree_apps(s_dict[@"tree"], expected_apps);
-            }
-
-            for (NSString *exp_app in expected_apps) {
-                for (int m = 0; m < all_count && space_win_count < 256; ++m) {
-                    if (!window_used[m] && all_windows[m]->application && all_windows[m]->application->name) {
-                        if ([exp_app isEqualToString:[NSString stringWithUTF8String:all_windows[m]->application->name]]) {
-                            window_used[m] = true;
-                            space_windows[space_win_count++] = all_windows[m];
-                            break;
-                        }
-                    }
-                }
-            }
-
-            for (int m = 0; m < all_count && space_win_count < 256; ++m) {
-                if (!window_used[m] && window_current_sid[m] == sid) {
-                    window_used[m] = true;
-                    space_windows[space_win_count++] = all_windows[m];
-                }
+            int space_win_count = (int) [indexes count];
+            for (int j = 0; j < space_win_count; ++j) {
+                int k = [indexes[j] intValue];
+                space_windows[j] = all_windows[k];
+                space_keys[j] = all_keys[k];
             }
 
             for (int m = 0; m < space_win_count; ++m) {
@@ -674,7 +738,9 @@ bool layout_store_restore_session(const char *name_or_path, char *out_path, size
             if (view->layout == VIEW_BSP) {
                 NSDictionary *tree_dict = s_dict[@"tree"];
                 if (tree_dict && [tree_dict isKindOfClass:[NSDictionary class]] && space_win_count > 0) {
-                    struct window_node *new_root = layout_store_reconstruct_node(tree_dict, space_windows, space_used, space_win_count, NULL, CHILD_NONE);
+                    struct window_node *new_root = layout_store_reconstruct_node(
+                        tree_dict, space_windows, space_keys, space_used, space_win_count,
+                        NULL, CHILD_NONE, err_msg, err_size);
                     if (new_root) {
                         if (view->root) {
                             insert_feedback_destroy(view->root);
