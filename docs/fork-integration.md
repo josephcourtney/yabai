@@ -1,6 +1,6 @@
 # Fork integration: correctness batch
 
-This branch is based on `compat/macos-27.0.1`; keep `master` untouched until runtime validation.
+This document tracks the correctness and layer-restoration batches merged into `compat/macos-27.0.1` on 2026-11-02 (PRs #1 and #6). The default `master` branch has not been promoted.
 
 ## Incorporated sources
 
@@ -23,14 +23,16 @@ specific cases, **not** every possible window, display, or Dock state. Native
 fullscreen preserved window membership and usable tiling but did **not**
 preserve the original pairwise tile ordering.
 
-The independent sublayer defect found during these tests is addressed in
-[PR #6](https://github.com/josephcourtney/yabai/pull/6), which must be
-integrated **after** this correctness batch. At source revision `82ce60b`,
+The independent sublayer defect found during these tests was fixed by
+[PR #6](https://github.com/josephcourtney/yabai/pull/6), merged **after** the
+correctness batch into the same compatibility branch. At source revision `82ce60b`,
 the user independently ran 36 pytest cases successfully and completed a
 guarded, SA-qualified, macOS 27 BSP→float→BSP cycle on a disposable Space.
 Both Kitty test windows transitioned from sublevel -20 to 0 and back to -20.
 This verifies the *transition* repair, not retroactive repair of already
-stranded layers.
+stranded layers. See [space-layer-qualification.md](space-layer-qualification.md)
+for the exact local acceptance evidence, guard conditions, and reproduction
+procedure.
 
 **Policy:** Do not require or create GitHub Actions workflows. The fork uses
 local Apple Silicon builds and code-signing, pytest, the native C test
@@ -59,30 +61,31 @@ From the qualification worktree on macOS:
 ```bash
 cd ~/code/yabai-qualification
 git fetch origin
-git switch --detach origin/integration/fork-correctness-20261022
-make clean
+git switch --detach origin/compat/macos-27.0.1
+just test-local
 just build
-just stop-installed
 just qualify-preflight
 ```
 
 `just qualify-preflight` is read-only. It fails if a Scroot process is detected or any yabai daemon is still running. It also prints HEAD and the baseline 30-second WindowServer error count; it does not change Dock, SIP, launchd, or configuration.
 
-**Caution:** on this baseline, `just run` executes the user's
-`~/.config/yabai/yabairc`, including any Dock-restart hooks or shell
-commands. It is not an isolated test configuration. PR #6 adds a default
-inert qualification config and an explicit `just run-user-config` opt-in.
-Inspect the configuration and use only a controlled test environment.
+`just run` now starts with an **inert** qualification configuration.
+It does not execute personal `~/.config/yabai/yabairc` hooks. The separate
+`just run-user-config` recipe explicitly opts into those hooks and is **not**
+appropriate for an isolated regression test. If an installed yabai service
+is running, stop it explicitly before the read-only preflight; do not change
+Dock or SIP merely to make this test pass.
 
-Run `just run` in Terminal 1 only when those hooks are acceptable; leave it
-in the foreground. In Terminal 2:
+Run `just run` in Terminal 1; leave it in the foreground. In Terminal 2:
 
 ```bash
 cd ~/code/yabai-qualification
 just smoke
 ```
 
-`just smoke` now runs `just qualify-running` first. That check uses macOS `proc_pidpath` to verify there is exactly one yabai daemon and that its *actual executable path* matches the test worktree binary. It also rejects a daemon that predates a rebuild. Optional `--ref origin/integration/fork-correctness-20261022` checks the checked-out Git revision. If a check fails, stop the daemon and resolve the mismatch rather than continuing with feature tests.
+`just smoke` now runs `just qualify-running` first. That check uses macOS `proc_pidpath` to verify there is exactly one yabai daemon and that its *actual executable path* matches the test worktree binary. It also rejects a daemon that predates a rebuild. The build stamp additionally checks the checked-out commit and the SHA-256
+of the signed binary; rebuilt or dirty trees cannot reuse an old stamp.
+Optional `--ref origin/compat/macos-27.0.1` checks the checked-out Git revision. If a check fails, stop the daemon and resolve the mismatch rather than continuing with feature tests.
 
 `just smoke` exercises daemon IPC and display/space/window queries **without requiring** the Dock scripting addition. Run `just smoke-sa` only after intentionally loading a compatible Dock payload; it requires a live, version-matching SA handshake. The 2026-10-23 isolated run at commit `55fd60b1` confirmed candidate PID 74354, Scroot absent, and working ordinary clicks, but the original `smoke` halted at `--check-sa` because the SA socket did not respond. That is not evidence of an input regression. Keep the no-SA test and any later injection test separate; `sudo ./bin/yabai --load-sa` can install/replace `/Library/ScriptingAdditions/yabai.osax` and restart Dock, and requires appropriate SIP configuration. Do not change SIP settings merely to make a smoke test pass.
 
@@ -134,9 +137,10 @@ measured before changing overflow behavior.
 4. Comparative macOS 27 SIP-on space switching from Christian-SC26 and wxwern with Dock-pattern validation.
 5. jpatrolla animation/focus-ring architecture, kept behind opt-in flags.
 
-**Validation status (2026-11-02):** GitHub Actions was removed by request.
-Local manual results are recorded above with scope and limitations. The
-required final native C-suite run and remaining edge-case investigations are
-tracked as follow-up qualification, not silently represented as passed tests.
-PR #6's validated Space-layer transition should be integrated on top of this
-batch before relying on BSP→float sublayer restoration.
+**Integration status (2026-11-02):** PR #1 merged as `63c643ee`, followed by
+PR #6 as `3c77aa6e`, into `compat/macos-27.0.1`. GitHub Actions workflows
+were removed by request. Local pytest and the scoped SA-qualified
+BSP→float→BSP test are recorded in the linked qualification document.
+Run `just test-local` and `just build` on the combined branch for final
+native-C and Python test evidence; a combined-branch C-suite result has
+**not** been supplied, and other edge-case investigations remain open.
