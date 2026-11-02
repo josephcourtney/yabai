@@ -135,7 +135,7 @@ class MutationSafetyTests(unittest.TestCase):
 
 class SourceWiringTests(unittest.TestCase):
     def test_restore_precedes_tree_clear(self):
-        source = (SCRIPT.parents[0] / "src" / "space_manager.c").read_text()
+        source = (SCRIPT.parents[1] / "src" / "space_manager.c").read_text()
         body = source.split("void space_manager_set_layout_for_space(", 1)[1].split("\n}\n", 1)[0]
         self.assertLess(
             body.index("space_manager_restore_layers_before_float(view)"),
@@ -143,8 +143,8 @@ class SourceWiringTests(unittest.TestCase):
         )
 
     def test_global_and_scoped_config_use_shared_setter(self):
-        space_src = (SCRIPT.parents[0] / "src" / "space_manager.c").read_text()
-        message_src = (SCRIPT.parents[0] / "src" / "message.c").read_text()
+        space_src = (SCRIPT.parents[1] / "src" / "space_manager.c").read_text()
+        message_src = (SCRIPT.parents[1] / "src" / "message.c").read_text()
         self.assertIn(
             "space_manager_set_layout_for_space(sm, view->sid, layout)",
             space_src,
