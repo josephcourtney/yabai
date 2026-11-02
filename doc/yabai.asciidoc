@@ -610,6 +610,39 @@ The properties that contain incorrect information for windows with `has-ax-refer
 }
 ----
 
+
+Workspace layout and session persistence
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+These commands explicitly save, inspect, or restore the current BSP layout or
+a multi-space workspace session as JSON. Restoring mutates window positions and
+layout trees; test with a disposable workspace first.
+
+*--save-layout ['<NAME_OR_PATH>']*::
+    Save the selected space's BSP layout to JSON. Named layouts are stored under
+    '~/.config/yabai/layouts/'.
+
+*--dump-layout*::
+    Print the selected space's BSP layout JSON without changing it.
+
+*--load-layout ['<NAME_OR_PATH>']*::
+    Restore a previously saved layout to the selected space. Only currently
+    available eligible windows can be matched; windows that are missing may
+    result in a partial reconstruction.
+
+*--save-session ['<NAME_OR_PATH>']*::
+    Save spaces and window-to-space assignments as a JSON session.
+
+*--dump-session*::
+    Print the current multi-space workspace session as JSON.
+
+*--load-session ['<NAME_OR_PATH>']*::
+    Restore a previously saved session. This can move windows between spaces.
+    Restoration across renamed displays, changed space indexes or missing
+    applications may be incomplete. The operation is not transactional and
+    does not automatically roll back a partial restoration.
+
+
 Rule
 ~~~~
 

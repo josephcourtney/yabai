@@ -114,6 +114,12 @@ extern bool g_verbose;
 #define COMMAND_SPACE_TOGGLE   "--toggle"
 #define COMMAND_SPACE_LAYOUT   "--layout"
 #define COMMAND_SPACE_LABEL    "--label"
+#define COMMAND_SPACE_SAVE_LAYOUT   "--save-layout"
+#define COMMAND_SPACE_LOAD_LAYOUT   "--load-layout"
+#define COMMAND_SPACE_DUMP_LAYOUT   "--dump-layout"
+#define COMMAND_SPACE_SAVE_SESSION  "--save-session"
+#define COMMAND_SPACE_LOAD_SESSION  "--load-session"
+#define COMMAND_SPACE_DUMP_SESSION  "--dump-session"
 
 #define ARGUMENT_SPACE_ROTATE_90    "90"
 #define ARGUMENT_SPACE_ROTATE_180   "180"
@@ -2103,6 +2109,56 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                         daemon_fail(rsp, "the selected space was not associated with a label!\n");
                     }
                 }
+            }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                   path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                      path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_LAYOUT)) {
+            char err[512] = {0};
+            if (!layout_store_dump(acting_sid, rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save_session(token_is_valid(value) ? value.text : NULL,
+                                           path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore_session(token_is_valid(value) ? value.text : NULL,
+                                              path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_SESSION)) {
+            char err[512] = {0};
+            if (!layout_store_dump_session(rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
             }
         } else {
             daemon_fail(rsp, "unknown command '%.*s' for domain '%.*s'\n", command.length, command.text, domain.length, domain.text);
