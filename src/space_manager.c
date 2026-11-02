@@ -203,9 +203,9 @@ void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, c
 // Tiled windows may have been placed in the BELOW sublayer by the Dock
 // scripting addition. Restore their automatic layers before the BSP/stack
 // tree forgets which windows it owns. Explicit user/rule layers are preserved
-// by window_manager_adjust_layer(). Without a loaded scripting addition the
-// layer operation can fail; a later SA-qualified run is required to repair
-// windows already stranded in BELOW.
+// by window_manager_adjust_layer(). Without a working scripting addition,
+// restoration is best-effort; this transition does not repair windows already
+// stranded below on a previously floating Space.
 static void space_manager_restore_layers_before_float(struct view *view)
 {
     int window_count = 0;
