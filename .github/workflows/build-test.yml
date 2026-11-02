@@ -23,9 +23,15 @@ jobs:
           xcodebuild -version
           xcrun --show-sdk-version
 
-      - name: Validate qualification helper
+      - name: Set up Python for pytest
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Validate qualification helper with pytest
         run: |
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 -m pip install -r requirements-test.txt
+          python3 -m pytest -q tests
           python3 scripts/qualify_runtime.py --help
           python3 scripts/qualify_layout_layers.py --help
 
