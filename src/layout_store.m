@@ -346,7 +346,9 @@ bool layout_store_restore(uint64_t sid, const char *name_or_path, char *out_path
         }
 
         if (root_dict[@"spaces"] && [root_dict[@"spaces"] isKindOfClass:[NSArray class]]) {
-            return layout_store_restore_session(name_or_path, out_path, out_path_size, err_msg, err_size);
+            snprintf(err_msg, err_size,
+                     "session data passed to --load-layout; use --load-session only in an isolated test session");
+            return false;
         }
 
         NSDictionary *tree_dict = root_dict[@"tree"];
