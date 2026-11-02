@@ -63,6 +63,15 @@ auto state="on":
     ./bin/yabai -m config window_reconciliation {{quote(state)}}
     ./bin/yabai -m config window_reconciliation
 
+# Read-only audit of potential stale sublayers on floating Spaces.
+qualify-layers: qualify-running
+    python3 ./scripts/qualify_layout_layers.py
+
+# Mutates ONLY the specified active disposable Space; requires a working Dock SA.
+# This cycles the layout bsp/stack -> float -> original and can reorder windows.
+qualify-layer-cycle space: qualify-running
+    python3 ./scripts/qualify_layout_layers.py --cycle-index {{quote(space)}} --allow-layout-mutation
+
 # Stop the existing launchd service explicitly.
 stop-installed:
     /opt/homebrew/bin/yabai --stop-service
