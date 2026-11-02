@@ -36,9 +36,15 @@ procedure.
 
 **Policy:** Do not require or create GitHub Actions workflows. The fork uses
 local Apple Silicon builds and code-signing, pytest, the native C test
-harness, and strictly scoped manual macOS regression tests. A completed native
-C-suite run at the final combined revision has **not** been supplied yet;
-do not claim it passed. This merge does not imply complete regression coverage.
+harness, and strictly scoped manual macOS regression tests. On 2026-11-02, the **merged** revision `d567fab` passed the full local
+`just test-local` gate: 36 Python pytest cases and 2 native C tests, with
+0 failures. `just build` then successfully compiled the `arm64e` Dock payload
+and loader, linked an `arm64` yabai binary, verified its Apple Development
+code signature, and stamped a clean checkout at `d567fab` with signed-binary
+SHA-256 prefix `9d5e86748b39cfd9`. Five nonfatal CoreVideo
+`CVDisplayLink*` API deprecation warnings arose from the **C test build**
+using the macOS 27 SDK; they were not test failures.
+These are local unit/build results, not complete desktop runtime coverage. This merge does not imply complete regression coverage.
 
 **Remaining intentionally unqualified cases:** PiP/transient dialog
 focus eligibility across sleep/wake; Mission Control cross-display moves;
@@ -141,6 +147,8 @@ measured before changing overflow behavior.
 PR #6 as `3c77aa6e`, into `compat/macos-27.0.1`. GitHub Actions workflows
 were removed by request. Local pytest and the scoped SA-qualified
 BSP→float→BSP test are recorded in the linked qualification document.
-Run `just test-local` and `just build` on the combined branch for final
-native-C and Python test evidence; a combined-branch C-suite result has
-**not** been supplied, and other edge-case investigations remain open.
+Final combined-branch unit/build qualification **passed locally** on
+`d567fab`: 36 pytest + 2 native C tests; signed arm64 build, healthy build
+stamp, no tracked modifications. The earlier runtime layer-transition check
+was on the same production fix before the final merge, not a new runtime
+check of the merged executable. Other edge-case investigations remain open.
