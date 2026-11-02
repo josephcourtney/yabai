@@ -73,7 +73,42 @@ def layer_results(windows, ids):
     }
 
 
-def qualify_cycle(binary, space_index, pause):
+DISPOSABLE_SPACE_LABEL = "yabai-layer-qualification"
+
+
+def validate_disposable_space(space, windows, space_index, expected_space_id, expected_window_ids):
+    """Fail closed before mutating any Space or any window layout."""
+    if space["id"] != expected_space_id:
+        raise RuntimeError("Space ID changed or wrong Space selected")
+    if space.get("label") != DISPOSABLE_SPACE_LABEL:
+        raise RuntimeError("Space lacks disposable qualification label")
+    if not space.get("has-focus"):
+        raise RuntimeError("Cycle test requires the selected Space to be active")
+    if space.get("type") not in ("bsp", "stack"):
+        raise RuntimeError("Cycle test requires an existing BSP or stack Space")
+
+    expected = set(expected_window_ids)
+    if len(expected) != len(expected_window_ids) or len(expected) != 2:
+        raise RuntimeError("Supply exactly two distinct test window IDs")
+    present = set(space.get("windows", []))
+    if present != expected:
+        raise RuntimeError("Space contains unexpected or missing windows: "
+                           f"expected {sorted(expected)}, found {sorted(present)}")
+
+    by_id = {w["id"]: w for w in windows}
+    for wid in expected:
+        window = by_id.get(wid)
+        if window is None or window.get("space") != space_index or window.get("app") != "kitty":
+            raise RuntimeError(f"window {wid} must be a visible Kitty test window")
+
+    if managed_candidates(windows, space_index) != expected:
+        raise RuntimeError("Test windows have not both been tiled into BELOW; "
+                           "the transition would be inconclusive")
+
+    return expected
+
+
+def qualify_cycle(binary, space_index, pause, expected_space_id, expected_window_ids):
     # Guard against testing an installed or unexpectedly running daemon.
     subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "qualify_runtime.py"), "running"],
@@ -84,15 +119,10 @@ def qualify_cycle(binary, space_index, pause):
     space = next((s for s in spaces if s["index"] == space_index), None)
     if space is None:
         raise RuntimeError(f"Space index {space_index} not found")
-    if not space.get("has-focus"):
-        raise RuntimeError("Cycle test requires the selected Space to be active")
-    if space.get("type") not in ("bsp", "stack"):
-        raise RuntimeError("Cycle test requires an existing BSP or stack Space")
-
+    ids = validate_disposable_space(
+        space, windows, space_index, expected_space_id, expected_window_ids
+    )
     initial_layout = space["type"]
-    ids = managed_candidates(windows, space_index)
-    if not ids:
-        raise RuntimeError("No lowered, managed windows found; test would be inconclusive")
 
     float_windows = []
     did_change = False
@@ -106,6 +136,8 @@ def qualify_cycle(binary, space_index, pause):
         current = next((s for s in mid_spaces if s["id"] == space["id"]), None)
         if not current or current.get("type") != "float":
             raise RuntimeError("Space did not enter float layout")
+        if set(current.get("windows", [])) != ids:
+            raise RuntimeError("Test Space window membership changed during cycle")
     finally:
         if did_change:
             # Restore even if querying or the float-state assertion fails.
@@ -138,16 +170,25 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "bin" / "yabai")
     parser.add_argument("--cycle-index", type=int, metavar="N")
+    parser.add_argument("--expected-space-id", type=int)
+    parser.add_argument("--test-window-ids", nargs=2, type=int, metavar=("W1", "W2"))
     parser.add_argument("--allow-layout-mutation", action="store_true")
     parser.add_argument("--pause", type=float, default=1.0)
     args = parser.parse_args()
     if args.cycle_index is not None:
         if not args.allow_layout_mutation:
             parser.error("--cycle-index requires --allow-layout-mutation")
+        if args.expected_space_id is None or args.test_window_ids is None:
+            parser.error("mutation requires --expected-space-id and --test-window-ids W1 W2")
+        if args.expected_space_id <= 0 or any(w <= 0 for w in args.test_window_ids):
+            parser.error("Space and window IDs must be positive")
         if args.pause < 0.2:
             parser.error("--pause must be at least 0.2 seconds")
         try:
-            return qualify_cycle(args.binary, args.cycle_index, args.pause)
+            return qualify_cycle(
+                args.binary, args.cycle_index, args.pause,
+                args.expected_space_id, args.test_window_ids
+            )
         except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 2
