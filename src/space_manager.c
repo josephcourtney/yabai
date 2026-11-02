@@ -200,9 +200,30 @@ void space_manager_set_label_for_space(struct space_manager *sm, uint64_t sid, c
     }));
 }
 
+// Tiled windows may have been placed in the BELOW sublayer by the Dock
+// scripting addition. Restore their automatic layers before the BSP/stack
+// tree forgets which windows it owns. Explicit user/rule layers are preserved
+// by window_manager_adjust_layer(). Without a working scripting addition,
+// restoration is best-effort; this transition does not repair windows already
+// stranded below on a previously floating Space.
+static void space_manager_restore_layers_before_float(struct view *view)
+{
+    int window_count = 0;
+    uint32_t *window_list = view_find_window_list(view, &window_count);
+
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_manager_find_window(&g_window_manager, window_list[i]);
+        if (window) window_manager_adjust_layer(window, LAYER_NORMAL);
+    }
+}
+
 void space_manager_set_layout_for_space(struct space_manager *sm, uint64_t sid, enum view_type layout)
 {
     struct view *view = space_manager_find_view(sm, sid);
+    if (view->layout != VIEW_FLOAT && layout == VIEW_FLOAT) {
+        space_manager_restore_layers_before_float(view);
+    }
+
     view->layout = layout;
     view_clear(view);
 
@@ -263,12 +284,7 @@ void space_manager_set_layout_for_all_spaces(struct space_manager *sm, enum view
     table_for (struct view *view, sm->view, {
         if (!view_check_flag(view, VIEW_LAYOUT)) {
             if (space_is_user(view->sid)) {
-                view->layout = layout;
-                view_clear(view);
-
-                if (view->layout != VIEW_FLOAT) {
-                    window_manager_validate_and_check_for_windows_on_space(sm, &g_window_manager, view->sid);
-                }
+                space_manager_set_layout_for_space(sm, view->sid, layout);
             }
         }
     })

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Intentionally inert yabai qualification configuration.
+# No signals, window rules, external commands, or system modifications.
+# Exercise only explicitly requested actions against the verified test daemon.

@@ -105,6 +105,23 @@ def main() -> int:
 
     sha = command("git", "-C", str(ROOT), "rev-parse", "HEAD").stdout.strip()
     print(f"HEAD: {sha}")
+
+    # The executable path and yabai --version alone cannot establish that
+    # a binary was compiled from this checkout. Verify the post-signing
+    # build stamp before accepting either preflight or running evidence.
+    if CANDIDATE.is_file():
+        provenance = command(
+            sys.executable, str(ROOT / "scripts" / "qualification_build_stamp.py"),
+            "verify", check=False
+        )
+        if provenance.returncode:
+            failures.append(
+                "unverified qualification binary: " +
+                provenance.stderr.strip()
+            )
+        else:
+            print(provenance.stdout.strip())
+
     if args.ref:
         try:
             expected = command(

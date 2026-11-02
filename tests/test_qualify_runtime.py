@@ -1,7 +1,8 @@
-"""Pure validation tests; do not require a running macOS desktop."""
+"""Pure process-detection checks; no macOS desktop required."""
 import importlib.util
 from pathlib import Path
-import unittest
+
+import pytest
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "qualify_runtime.py"
@@ -11,29 +12,23 @@ module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(module)
 
 
-class ScrootDetectionTests(unittest.TestCase):
-    def test_live_menu_and_worker(self):
-        for cmd in (
-            "/Users/example/.local/bin/scroot menubar",
-            "/usr/bin/python3 -m scroot menubar",
-            "python /tmp/mund/packages/scroot/src/scroot/worker.py",
-            "launchagent org.mund.scroot.menubar",
-            "scroot",
-        ):
-            with self.subTest(cmd=cmd):
-                self.assertTrue(module.scroot_process(cmd))
-
-    def test_does_not_match_other_tools(self):
-        for cmd in (
-            "/opt/homebrew/bin/yabai --verbose",
-            "/usr/bin/python3 scripts/qualify_runtime.py running",
-            "/Applications/kitty.app/Contents/MacOS/kitty",
-            "/usr/bin/python3 scripts/qualify_runtime.py --ref origin/integration/test",
-            "/usr/bin/python3 /tmp/scrooter.py",
-        ):
-            with self.subTest(cmd=cmd):
-                self.assertFalse(module.scroot_process(cmd))
+@pytest.mark.parametrize("command_line", [
+    "/Users/example/.local/bin/scroot menubar",
+    "/usr/bin/python3 -m scroot menubar",
+    "python /tmp/mund/packages/scroot/src/scroot/worker.py",
+    "launchagent org.mund.scroot.menubar",
+    "scroot",
+])
+def test_recognizes_live_scroot_processes(command_line):
+    assert module.scroot_process(command_line)
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.parametrize("command_line", [
+    "/opt/homebrew/bin/yabai --verbose",
+    "/usr/bin/python3 scripts/qualify_runtime.py running",
+    "/Applications/kitty.app/Contents/MacOS/kitty",
+    "/usr/bin/python3 scripts/qualify_runtime.py --ref origin/integration/test",
+    "/usr/bin/python3 /tmp/scrooter.py",
+])
+def test_does_not_match_unrelated_tools(command_line):
+    assert not module.scroot_process(command_line)
