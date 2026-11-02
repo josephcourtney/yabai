@@ -24,6 +24,8 @@ extern bool g_verbose;
 #define COMMAND_CONFIG_WINDOW_RECONCILIATION "window_reconciliation"
 #define COMMAND_CONFIG_RECONCILIATION_INTERVAL "window_reconciliation_interval"
 #define COMMAND_CONFIG_MFF                   "mouse_follows_focus"
+#define COMMAND_CONFIG_MANAGE                "manage"
+#define COMMAND_CONFIG_WINDOW_SUBLAYER_AUTO  "window_sublayer_auto"
 #define COMMAND_CONFIG_FFM                   "focus_follows_mouse"
 #define COMMAND_CONFIG_DISPLAY_ORDER         "display_arrangement_order"
 #define COMMAND_CONFIG_WINDOW_ORIGIN         "window_origin_display"
@@ -114,6 +116,12 @@ extern bool g_verbose;
 #define COMMAND_SPACE_TOGGLE   "--toggle"
 #define COMMAND_SPACE_LAYOUT   "--layout"
 #define COMMAND_SPACE_LABEL    "--label"
+#define COMMAND_SPACE_SAVE_LAYOUT   "--save-layout"
+#define COMMAND_SPACE_LOAD_LAYOUT   "--load-layout"
+#define COMMAND_SPACE_DUMP_LAYOUT   "--dump-layout"
+#define COMMAND_SPACE_SAVE_SESSION  "--save-session"
+#define COMMAND_SPACE_LOAD_SESSION  "--load-session"
+#define COMMAND_SPACE_DUMP_SESSION  "--dump-session"
 
 #define ARGUMENT_SPACE_ROTATE_90    "90"
 #define ARGUMENT_SPACE_ROTATE_180   "180"
@@ -1255,6 +1263,24 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
+        } else if (token_equals(command, COMMAND_CONFIG_MANAGE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_manager.manage]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF) || token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                window_manager_set_manage_enabled(&g_space_manager, &g_window_manager, token_equals(value, ARGUMENT_COMMON_VAL_ON));
+            } else {
+                daemon_fail(rsp, "manage expects 'on' or 'off'.\n");
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_SUBLAYER_AUTO)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_window_sublayer_auto]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF) || token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                window_manager_set_window_sublayer_auto_enabled(&g_window_manager, token_equals(value, ARGUMENT_COMMON_VAL_ON));
+            } else {
+                daemon_fail(rsp, "window_sublayer_auto expects 'on' or 'off'.\n");
+            }
         } else if (token_equals(command, COMMAND_CONFIG_FFM)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
@@ -2098,6 +2124,56 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                         daemon_fail(rsp, "the selected space was not associated with a label!\n");
                     }
                 }
+            }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                   path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                      path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_LAYOUT)) {
+            char err[512] = {0};
+            if (!layout_store_dump(acting_sid, rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save_session(token_is_valid(value) ? value.text : NULL,
+                                           path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore_session(token_is_valid(value) ? value.text : NULL,
+                                              path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_SESSION)) {
+            char err[512] = {0};
+            if (!layout_store_dump_session(rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
             }
         } else {
             daemon_fail(rsp, "unknown command '%.*s' for domain '%.*s'\n", command.length, command.text, domain.length, domain.text);
