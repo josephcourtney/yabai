@@ -25,8 +25,9 @@ jobs:
 
       - name: Validate qualification helper
         run: |
-          python3 -m unittest discover -s tests -p test_qualify_runtime.py -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
           python3 scripts/qualify_runtime.py --help
+          python3 scripts/qualify_layout_layers.py --help
 
       - name: Build Apple Silicon yabai and Dock payload
         run: |
