@@ -759,6 +759,52 @@ signatures in separate summaries. Do not attribute an individual
 process without a client/request identifier or a discriminating
 intervention. No Apple/Jamf service changes are authorized.
 
+## Five-minute passive baseline: stable once-per-minute signature (2026-11-04 16:31–16:36 EST)
+
+`just ws-idle periodic-passive-02 300` ran 16:31:08.480 to
+16:36:08.520 (300.040 s), with `yabai_pids_before=[]` and
+`yabai_pids_after=[]`, no PID change. The raw diagnostic log
+contains **only** 55 matching error messages from WindowServer
+PID 464, thread ee4, with five **11-message** bursts:
+
+| First error | Last error | Count | Duration |
+| --- | --- | ---: | ---: |
+| 16:31:58.851 | 16:31:58.873 | 11 | 22 ms |
+| 16:32:58.854 | 16:32:58.885 | 11 | 31 ms |
+| 16:33:58.853 | 16:33:58.886 | 11 | 33 ms |
+| 16:34:58.853 | 16:34:58.874 | 11 | 21 ms |
+| 16:35:58.855 | 16:35:58.873 | 11 | 18 ms |
+
+Successive first-error intervals: **60.003, 59.999, 60.000,
+60.002 s**; first-error phase range only **4 ms**. This is
+strong evidence for a stable wall-clock-minute-aligned trigger
+independent of a *running* yabai daemon. Earlier A/B/A results
+also demonstrate the 11-error signature while SketchyVim was
+stopped. The raw file was produced by the matching-error
+collector, **not a full unified log**: it does not show other
+processes' activity or rule out foreground transitions, ping
+timeouts or transaction activity.
+
+A shell `pgrep -fl '[/]yabai'` check matched the Kitty
+`run-shell` command line because its current working directory
+contained `yabai-zen-qualification`. That is a **false
+positive for a daemon**; the diagnostic's dedicated yabai PID
+fields were empty at both endpoints.
+
+**Next experiment: passive multi-process context capture.**
+Do not repeat the count alone. Collect a 3–5-minute bounded
+`log show --info` from the **same interval** for WindowServer,
+Dock, SystemUIServer and possible client processes. Examine
+the 2 seconds preceding each :58.85 burst and compare with
+non-burst minute windows. Look for a recurring event with
+matching phase and stable client/connection ID; do not infer
+causation from coincident logging alone. Start with existing
+historical unified logs before acquiring a new live capture.
+If no precursor appears at info level, consider a bounded
+debug-level capture or explicit per-process logging only after
+checking overhead and privacy. Do not stop Apple/Jamf agents
+or alter SIP/Dock/WindowServer.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
