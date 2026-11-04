@@ -35,6 +35,51 @@ Relevant public reports (independent, not proof of local causality):
 - https://github.com/openai/codex/issues/32501
 - https://github.com/jizhi0v0/macos27-beta-issues/blob/main/issues/apple-windowserver-invalid-window.md
 
+## Follow-up controlled data (2026-11-04, 12:45–12:51 EST)
+
+After rebuilding the signed candidate at commit `cae12ccf96aa`, local
+qualification reported **75 Python tests and two native C tests passing**,
+with a verified clean signed ARM64 build. The following independent
+phase-bounded 30-second measurements were collected:
+
+| Phase | Running yabai | Reconciliation | Errors | Bursts |
+| --- | --- | --- | ---: | --- |
+| no-daemon-01 | no | n/a | 6 | 6 |
+| no-daemon-02 | no | n/a | 59 | 59 |
+| idle-on-01 | yes, PID 7859 | on | 118 | 59 + 59 |
+| idle-off-01 | yes, PID 7859 | off | 6 | 6 |
+| idle-on-02 | yes, PID 7859 | on | 0 | none |
+| bsp-create-01 | yes, PID 7859 | not logged | 6 | 6 |
+
+**Key update:** the exact 59-error burst occurred at 12:46:25.718–25.890
+with **no yabai process before or after the capture**. Running yabai and
+the 750 ms reconciliation timer are therefore not necessary for a 59-error
+burst. This does not exclude prior state altered by yabai or the Dock
+scripting addition, or another macOS component.
+
+The 6-error pattern occurred near 12:45:58.770–.784, 12:47:58.768–.784,
+and 12:49:58.767–.783, an approximately **120-second separation** in
+these three measurements despite different daemon conditions. Treat a
+separate periodic activity (e.g. another process or OS component) as a
+candidate and collect more data before assigning a source.
+
+**Invalid operation association:** `bsp-create-01` was captured from
+12:49:47 to 12:50:27, but the logged `space --layout bsp` command ran
+at 12:50:48. Its 6 errors at 12:49:58 cannot be evidence of that layout
+command. Other unlogged manual operations may still have taken place.
+
+**Invalid overlapping controls:** `bsp-create-03` started at 12:51:19
+and `bsp-create-04` at 12:51:27 without either being finished. Any
+results from the overlapping phases are not independent. Preserve their
+markers and explicitly abandon them if they cannot be interpreted.
+The diagnostic harness now rejects new phase starts while *any* phase
+is active and supports evidence-preserving archival.
+
+The observed background 59-error and 6-error burst signatures reduce the
+value of a single BSP ON/OFF comparison. Prefer synchronized observations
+with precisely recorded operations and repeated controls before assigning
+a window-management cause.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
@@ -74,9 +119,21 @@ On macOS, from this branch:
 Reports are written to /tmp/yabai-windowserver-diagnostics/ as
 <phase>.json and <phase>.log. A phase with a pending start has an
 <phase>.active.json marker. Names must be unique; existing results are
-never overwritten. PIDs that change between start and finish are
-recorded as a confound. Phases are bounded to 15 minutes. A log query
-error preserves the marker instead of silently claiming zero events.
+never overwritten. **Only one active phase at a time is permitted**;
+interprocess file locking rejects accidental overlap. PIDs that change
+between start and finish are recorded as a confound. Phases are bounded
+to 15 minutes. A log query error preserves the marker instead of silently
+claiming zero events. To inspect and archive interrupted phases without
+losing evidence:
+
+    just ws-status
+    just ws-abandon bsp-create-03 "overlapping phase, no reliable end timestamp"
+    just ws-abandon bsp-create-04 "overlapping phase, no reliable end timestamp"
+
+Abandoned phases remain as <phase>.abandoned.json (including the original
+start timestamp, PID list, archival timestamp and reason); the active
+markers are then retired. Do **not** finish an old phase long after its
+operation or recycle a completed/abandoned label.
 
 The offline parser also accepts the archived original log:
 
