@@ -131,19 +131,70 @@ longer reproduce the defect; that is not a failure of the fallback.
 
 ## Qualification status
 
-- **Observed 2026-11-04 on integration revision `3fb3bfeb`:** `--refresh`
-  found two missing Zen windows; explicitly enabled reconciliation then
-  registered and visibly tiled a detached Zen window automatically.
-- **2026-11-04 local build:** 52 Python tests, two native C tests,
-  signed ARM64 build and commit/build-stamp verification passed for
-  `5a31035dcba1`. These results predate the qualification-harness corrections.
-- **2026-11-04 failed live acceptance:** running binary identity and build
-  provenance passed, but Space 211 was floating and the baseline could not
-  dump its BSP tree. None of the later stages were exercised. The observed
-  WindowServer invalid-window rate peaked at 130 per 30 seconds; this is a
-  safety/diagnostic concern, not attributable to yabai without isolation.
-- **Not yet established for this branch:** newly compiled default-on
-  initialization, end-to-end staged tests on a disposable BSP Space,
-  busy-process latency, sleep/wake, and cross-Space repeated detachment/closure.
+### Completed: macOS runtime acceptance (2026-11-04)
 
-No GitHub Actions or system-wide service modifications are part of this work.
+- **Build and offline tests:** `490c05342f366b49ec697b10c7c0b31dcedc0f81`
+  passed 60 Python tests and two native C tests. The ARM64 binary was built
+  and Apple Development signed, with SHA-256 prefix `01aba8e4068af48b`.
+  `just qualify-preflight` passed, and the runtime check verified that the
+  foreground process actually ran the signed binary.
+- **Dedicated BSP test Space:** index 5, persistent Space ID 245, label
+  `yabai-zen-qualification`. Kitty (8200) stayed present to operate the
+  test. After the initial floating-Space setup error, the Space was configured
+  to BSP, and the qualification state was preserved between stages.
+- **All six sequential live stages passed**, without `window --refresh`:
+  1. `baseline`: Zen window 8667.
+  2. `ordinary`: an additional Zen window 8755.
+  3. `detach1`: detached Zen tab became window 8768.
+  4. `detach2`: second detached Zen tab became window 8777.
+  5. `returned`: expected window inventory and BSP membership still held
+     after the operator-reported Space switch and return.
+  6. `closed`: detached windows 8768 and 8777 disappeared while original
+     windows 8667 and 8755 remained.
+- Every stage reported `PASS` under daemon PID 75826, with verified binary
+  provenance, matching Space identity, AX references, nonfloating window
+  state, and expected Zen count in the live BSP tree. The tree dump validates
+  count and application names, not exact native IDs or tile ordering.
+- **Result:** the previously reproduced missed Zen tab-detachment registration
+  did not recur during these two consecutive detachments with the Zen-only
+  reconciliation fallback enabled. This is a successful functional acceptance
+  test, not proof that every future Zen build or macOS transition is covered.
+
+### Separate unresolved WindowServer error investigation
+
+- The WindowServer emitted intermittent
+  `_CGXPackagesSetWindowConstraints: Invalid window` bursts during desktop
+  operations. The `just qualify-running` 30-second counts included 195 at
+  `ordinary`, 177 at `detach1`, 307 at `detach2`, 77 at `returned`,
+  and 195 at `closed`.
+- Following a 35-second period with **no yabai daemon**, preflight recorded
+  6 errors in the prior 30 seconds. An idle within-daemon comparison measured
+  6 with reconciliation OFF versus 0 with reconciliation ON. These observations
+  **do not** support a claim that the 750 ms reconciliation timer alone causes
+  the bursts.
+- The uploaded WindowServer excerpt shows repeated subsecond bursts of
+  identical errors, but does not identify the initiating process or invalid
+  window ID. The relationship to yabai, BSP operations, Dock/window-layer
+  behavior, or other components is unresolved.
+- Functional testing may be considered **passed**, but do not classify the
+  separate desktop/window-server safety issue as resolved on this evidence.
+  Avoid promoting this feature branch to a production merge until the
+  operational risk and reproducibility have been evaluated.
+
+### Earlier failed setup attempt (not a functional failure)
+
+The first test targeted Space 211, which was floating; the BSP layout dump
+failed before a baseline state could be written. The harness was corrected
+to validate identity, focus, label and BSP layout before querying the tree,
+with additional offline regression cases. A daemon restart later reset the
+disposable Space layout and label; the operator explicitly restored them.
+
+### Remaining coverage limits
+
+Extended stress/latency measurements, sleep/wake, multi-display behavior,
+repeated cross-Space detachments, and classification of the WindowServer
+bursts remain unqualified. The fallback can be disabled with
+`config window_reconciliation off`; the disabled case must not be assumed
+to auto-discover detached Zen tabs.
+
+No GitHub Actions or system-wide service changes are part of this work.
