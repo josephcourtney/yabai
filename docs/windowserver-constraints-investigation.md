@@ -696,13 +696,16 @@ wall-clock-aligned mechanism that does not require yabai
 or SketchyVim. The exact source remains unknown.
 
 The two **109-message** bursts occur ~2.996 seconds apart in
-the same nominally no-switch capture. They establish that a
-*deliberate user-triggered app activation* is not a necessary
-stated precondition, but the summary does not independently
-verify that no automatic foreground, display, window, or Space
-change occurred. The previous "activation-associated" signature
-should therefore be broadened to **large nonperiodic bursts,
-often accompanying activation**, not described as activation-only.
+the same nominally no-switch capture. **Subsequent contextual logs
+confirm foreground activations**: Zen at 16:17:45.009–.011 and
+Kitty at 16:17:48.002–.005, followed by the corresponding invalid
+constraint errors at 16:17:45.299 and 16:17:48.295 (~288–290 ms
+later). Both transitions have WindowServer deferred ordering and
+frontmost-process updates; the second also has mouse events.
+The label `periodic-no-switch-01` therefore does **not** describe
+a genuinely uninterrupted no-switch control. The two 109-message
+bursts reinforce the activation-associated signature; they are
+not evidence of large bursts without foreground changes.
 
 **Next evidence collection (read-only):** obtain all
 WindowServer, Dock and SystemUIServer messages spanning
@@ -713,6 +716,48 @@ or another event. A wider 16:15:56–16:16:01 and
 16:16:56–16:17:01 slice may identify the source of the
 minute-aligned 11-message groups. Do not attribute a process
 without a corresponding client/request ID or intervention.
+
+## Corrected activation context and periodic-source experiment
+
+The contextual 16:17:43–16:17:50 log confirms that the 109-error
+bursts follow **Zen and Kitty activation**, not an otherwise
+unchanged desktop. The 11-error groups at 16:15:58.852 and
+16:16:58.855 are still consistent with a separate wall-clock
+minute-aligned mechanism. Their source is unknown; the current
+evidence does not establish a causal link to the historic input
+freeze.
+
+**Next passive capture:** With yabai stopped and SketchyVim in
+its restored normal state, use a fresh phase name for an uninterrupted
+4–5-minute `just ws-idle` capture. Avoid manual app switching,
+window manipulation, or display-brightness changes while it runs.
+The operator should note any accidental interaction, because the
+phase label alone does not validate inactivity. This collects
+several :58 boundaries without toggling any other service.
+
+Afterward, retrieve a bounded, information-level WindowServer
+context covering the same interval (substitute the exact start/end
+times from the phase JSON):
+
+```sh
+log show --style compact --info \
+  --start '2026-11-04 HH:MM:SS' \
+  --end '2026-11-04 HH:MM:SS' \
+  --predicate '(process == "WindowServer" OR process == "Dock" OR process == "SystemUIServer")' \
+  > /tmp/yabai-ws-periodic-context.log
+```
+
+For each :58 burst, compare the preceding 3 seconds and following
+1 second for deferred ordering/frontmost-process changes, failed
+pings, transaction timeouts, display changes, timer-like log
+messages, and consistent connection/window identifiers. Report
+negative findings only for message classes actually present in
+the collected logging level; a missing log line is not proof the
+underlying event did not occur. Compare with at least one matched
+non-burst minute. Keep periodic and activation-associated
+signatures in separate summaries. Do not attribute an individual
+process without a client/request identifier or a discriminating
+intervention. No Apple/Jamf service changes are authorized.
 
 ## Code paths to distinguish
 
