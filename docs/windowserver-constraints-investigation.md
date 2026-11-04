@@ -316,6 +316,54 @@ not disrupt the machine. A separate incident report should correlate
 time of symptoms, current process identities and logs. Avoid
 automating invasive mitigation based on error counts.
 
+## Repeated ping-recipient process identities (2026-11-04 14:47)
+
+Read-only `ps -p 28948,1139,773,606 -o pid,lstart,ppid,comm,args`
+identified the four processes repeatedly mentioned by WindowServer.
+All had start times preceding both 14:27 and 14:47 captures:
+
+| PID | Started, local time | Executable | Identification |
+| --- | --- | --- | --- |
+| 606 | Nov 2 19:40:14 | `/Library/Application Support/JAMF/Jamf.app/Contents/MacOS/JamfDaemon…` | Jamf management daemon (administrative framework) |
+| 773 | Nov 2 19:40:22 | `/usr/sbin/universalaccessd` | macOS accessibility system service |
+| 1139 | Nov 2 19:41:02 | `~/.local/bin/svim` | User-local executable; its function is currently unknown |
+| 28948 | Nov 4 13:27:54 | `/usr/libexec/studentd` | **Apple Classroom** student-control agent (not Screen Time) |
+
+Each process had `PPID=1`, indicating launchd parentage, but
+launch context and management policy remain unexamined.
+No PID-reuse issue is apparent between the shown process start times
+and the captured events; that does not prove any process caused an
+error. Jamf confirms its daemon supports administrative monitoring;
+Apple's `studentd(8)` manpage identifies it as Classroom's agent.
+Neither daemon should be modified or stopped for this test. In
+particular, this Mac appears to be managed by Jamf; respect
+organizational policies.
+
+**Causal limitation:** A WindowServer message saying a process
+`failed to act on a ping it dequeued before timing out` does not
+establish that the process initiated the failing
+`_CGXPackagesSetWindowConstraints` request. The four recipients
+could instead reflect a common broadcast/timeout path. The same
+four PIDs preceding both Zen-related and non-Zen application
+switches is evidence about shared participation in WindowServer's
+state, not individual responsibility.
+
+**Read-only follow-up** to establish context and potential
+responsiveness anomalies, without terminating any process:
+
+```sh
+ps -p 28948,1139,773,606 -o pid,ppid,uid,stat,%cpu,%mem,etime,command
+file "$HOME/.local/bin/svim"
+ls -l "$HOME/.local/bin/svim"
+codesign -dv --verbose=2 "$HOME/.local/bin/svim" 2>&1
+```
+
+The `svim` path is a user-local executable, not enough to infer
+its purpose or use of Accessibility, window-focus automation, or
+WindowServer APIs. Before proposing an A/B disabling test,
+inspect how the executable is launched and what it does.
+Do not change Jamf, Apple services, or launchd definitions.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
