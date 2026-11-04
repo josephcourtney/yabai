@@ -201,6 +201,51 @@ capture for causal ordering. The focus-transition evidence is strong
 temporal correlation, **not** attribution of an underlying defect.
 
 
+## Non-Zen focus-control summary (2026-11-04 14:46–14:47 EST)
+
+The reported `focus-other-01` experiment lasted 30.037 seconds
+(14:46:49.036–14:47:19.073) and recorded **491** matching errors
+in six grouped bursts, with `yabai_pids_before=[]` and
+`yabai_pids_after=[]`.
+
+| Burst start | End | Error count | Duration |
+| --- | --- | ---: | ---: |
+| 14:46:58.037 | 14:46:58.960 | 120 | 923 ms |
+| 14:47:00.725 | 14:47:00.927 | 19 | 202 ms |
+| 14:47:02.237 | 14:47:02.511 | 109 | 274 ms |
+| 14:47:04.729 | 14:47:04.957 | 99 | 228 ms |
+| 14:47:06.020 | 14:47:07.860 | 141 | 1840 ms |
+| 14:47:17.264 | 14:47:17.342 | 3 | 78 ms |
+
+This makes a **running** yabai daemon unnecessary to reproduce
+substantial WindowServer invalid-window logging. The phase label
+indicates an intended control involving an app other than Zen, but
+the summary alone does **not** confirm actual foreground application
+identities or interaction count. No attribution to another app or
+specific OS routine should be made without the contextual log.
+
+The 1840 ms grouped burst means the first and final errors were
+1.84 seconds apart; grouping allows internal gaps up to 1 second,
+so it does not establish continuous blocked operation for 1.84
+seconds or an actual input freeze.
+
+Next, retrieve a window covering **all six bursts** with the same
+WindowServer/Dock/SystemUIServer predicate:
+
+```sh
+log show --style compact --info \
+  --start '2026-11-04 14:46:56' \
+  --end '2026-11-04 14:47:19' \
+  --predicate '(process == "WindowServer" OR process == "Dock" OR process == "SystemUIServer")' \
+  > /tmp/yabai-windowserver-context-1447.log
+```
+
+Review foreground changes, ping failures, transaction timeouts, and
+other app/window lifecycle events immediately preceding each burst.
+If degraded pointer/keyboard responsiveness occurs, suspend interactive
+trials. Do not kill WindowServer or change Dock/SIP settings as an
+unvalidated workaround.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
