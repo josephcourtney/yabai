@@ -133,6 +133,45 @@ The current phase collector logs the constraint errors, not all
 transaction/activation messages; use a separate bounded `log show --info`
 query for any stage where those messages matter.
 
+## Follow-up focus-to-Zen experiment (2026-11-04 14:27 EST)
+
+The 30-second `focus-zen-01` phase ran from 14:27:09.252 to
+14:27:39.302, with `yabai_pids_before=[]` and
+`yabai_pids_after=[]`. It recorded two equal bursts, each containing
+**109** invalid-window errors:
+
+| Burst | Start | End | Count | Duration |
+| --- | --- | --- | ---: | ---: |
+| 1 | 14:27:12.335 | 14:27:12.545 | 109 | 210 ms |
+| 2 | 14:27:28.643 | 14:27:28.880 | 109 | 237 ms |
+
+The first burst occurred 3.083 seconds after the phase began, consistent
+with the requested manual Kitty-to-Zen activation. A second burst
+occurred 16.308 seconds later. The summary log **does not record**
+frontmost-app changes, so neither burst has yet been causally assigned
+to focus activation. The repeated size of 109 instead of the earlier
+59 demonstrates that burst size is not fixed across sessions. It is
+not evidence of exactly 109 failed windows.
+
+Before performing further window-management experiments, inspect detailed
+WindowServer and Dock activity at both burst times. For example:
+
+```sh
+log show --style compact --info \
+  --start '2026-11-04 14:27:10' \
+  --end '2026-11-04 14:27:31' \
+  --predicate '(process == "WindowServer" OR process == "Dock" OR process == "SystemUIServer")' \
+  > /tmp/yabai-windowserver-context-1427.log
+```
+
+Check if both bursts follow actual `frontmostProcess`,
+`DoDeferredOrdering`, `OrderWindow`, or transaction-timeout messages.
+A Kitty-only control, repeated Zen activation controls, and another-app
+activation control should follow only if these detailed events indicate
+that doing so could discriminate the source. Avoid conflating background
+timers with focus transitions, and do not start another yabai daemon for
+this investigation.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
