@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -128,3 +129,90 @@ def test_source_wiring_default_and_dedup():
     assert "if (existing_window) { CFRelease(context); return; }" in handler
     assert "window_manager_should_manage_window(window)" in handler
     assert "space_manager_tile_window_on_space" in handler
+
+
+@pytest.mark.parametrize(("space_change", "match"), [
+    ({"type": "float"}, "has layout 'float'"),
+    ({"id": 501}, "ID changed"),
+    ({"label": "real-work-space"}, "labeled"),
+    ({"has-focus": False}, "not focused"),
+])
+def test_read_snapshot_rejects_unsafe_space_before_bsp_dump(
+        monkeypatch, space_change, match):
+    space = dict(snapshot()["spaces"][0], **space_change)
+    calls = []
+
+    def fake_command(binary, *args):
+        calls.append(args)
+        assert args == ("query", "--spaces"), "queried windows/layout before Space guard"
+        return json.dumps([space])
+
+    monkeypatch.setattr(module, "command", fake_command)
+    with pytest.raises(module.QualificationError, match=match):
+        module.read_snapshot(BINARY, 3, 500)
+    assert calls == [("query", "--spaces")]
+
+
+def test_read_snapshot_missing_zen_skips_bsp_dump(monkeypatch):
+    s = snapshot()
+    calls = []
+    replies = {
+        ("query", "--spaces"): json.dumps(s["spaces"]),
+        ("query", "--windows"): json.dumps([]),
+    }
+
+    def fake_command(binary, *args):
+        calls.append(args)
+        return replies[args]
+
+    monkeypatch.setattr(module, "command", fake_command)
+    with pytest.raises(module.QualificationError, match="no registered Zen window"):
+        module.read_snapshot(BINARY, 3, 500)
+    assert calls == [("query", "--spaces"), ("query", "--windows")]
+
+
+def test_read_snapshot_validates_before_dump_and_returns_complete_snapshot(monkeypatch):
+    s = snapshot()
+    calls = []
+    replies = {
+        ("query", "--spaces"): json.dumps(s["spaces"]),
+        ("query", "--windows"): json.dumps(s["windows"]),
+        ("space", "3", "--dump-layout"): json.dumps(s["layout"]),
+        ("config", "window_reconciliation"): s["reconciliation"],
+        ("config", "window_reconciliation_interval"): str(s["interval"]),
+    }
+
+    def fake_command(binary, *args):
+        calls.append(args)
+        return replies[args]
+
+    monkeypatch.setattr(module, "command", fake_command)
+    assert module.read_snapshot(BINARY, 3, 500) == s
+    assert calls == list(replies)
+
+
+def test_command_surfaces_yabai_error_detail(monkeypatch):
+    def fail(*args, **kwargs):
+        raise module.subprocess.CalledProcessError(
+            1, ["bin/yabai", "-m", "space", "3", "--dump-layout"],
+            stderr="could not dump non-BSP Space",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fail)
+    with pytest.raises(module.QualificationError, match="could not dump non-BSP Space"):
+        module.command(BINARY, "space", "3", "--dump-layout")
+
+
+def test_missing_baseline_has_actionable_message(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        module.sys, "argv",
+        ["qualify_zen_reconciliation.py", "ordinary", "--space-index", "3",
+         "--space-id", "500", "--state", str(tmp_path / "absent.json")],
+    )
+    monkeypatch.setattr(
+        module, "read_snapshot",
+        lambda *args: pytest.fail("queried daemon without a baseline state"),
+    )
+    assert module.main() == 1
+    assert "run baseline successfully" in capsys.readouterr().err
