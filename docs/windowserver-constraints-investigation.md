@@ -494,6 +494,73 @@ disabled or launching several copies. Do not modify managed or Apple
 agents. Source binary/permissions investigation is separate from
 the already functionally qualified yabai Zen reconciliation fix.
 
+## SketchyVim service ownership follow-up (2026-11-04 15:52 EST)
+
+The primary `com.josephcourtney.svim` service is loaded from
+`~/Library/LaunchAgents/com.josephcourtney.svim.plist`, `state=running`,
+PID **1139**, `runs=1`, last exit **never exited**. The plist has
+`RunAtLoad=true` but no explicit `KeepAlive`, and configures a
+`PATH` containing `/opt/homebrew/bin`.
+
+`com.josephcourtney.svim-upstream-check` is separately loaded,
+**not running**, `runs=7`, and last exited **0**; its executable
+is `~/.local/bin/svim-upstream-watch`. Searches for the
+`homebrew.mxcl.svim` and `sh.brew.svim` service labels returned
+no matching status lines (the original command suppressed errors),
+so these services cannot be identified as active duplicate editors.
+No evidence of more than one running SketchyVim instance was found.
+
+The `svim.sh` callback uses a bare `sketchybar` invocation on
+line 19, but `command -v sketchybar` resolves
+`/opt/homebrew/bin/sketchybar` and the primary LaunchAgent includes
+that directory in its PATH. Historical `command not found` messages
+therefore could reflect a different callback environment or earlier
+configuration; inspect timestamp and subprocess environment before
+changing the script.
+
+The attempted log timestamp command printed
+`stat: bad file descriptor`. Prefer the explicit macOS executable:
+
+```sh
+/usr/bin/stat -f '%Sm %z %N' -t '%Y-%m-%d %H:%M:%S' \
+  "$HOME/Library/Logs/svim.err" "$HOME/Library/Logs/svim.log"
+```
+
+### Proposed controlled SketchyVim A/B/A trial (not yet performed)
+
+**Preconditions:** yabai stopped, no active WS diagnostic phase,
+only the `com.josephcourtney.svim` job owning PID 1139, and no
+ongoing editor activity requiring SketchyVim. On each arm, repeat
+the same explicit Kitty → Messages → Kitty focus sequence
+and record visible responsiveness. A single trial has high variance
+and is not sufficient for causal attribution.
+
+1. **A1, SketchyVim ON:** verify the primary service is running;
+   capture a fresh, uniquely named 30-second phase, switch focus
+   twice on the same Space, and record event times.
+2. **B, SketchyVim OFF:** temporarily boot out **only the user
+   LaunchAgent** `gui/$(id -u)/com.josephcourtney.svim`
+   (`launchctl bootout`), verify `pgrep -fl svim` and
+   `launchctl print` state, repeat the same phase with a new label.
+   Leave Jamf, Apple services, the updater job and OS preferences
+   untouched.
+3. **A2, SketchyVim ON:** restore the original job with
+   `launchctl bootstrap gui/$(id -u)
+   "$HOME/Library/LaunchAgents/com.josephcourtney.svim.plist"`;
+   verify a single new SketchyVim PID, and repeat the phase.
+   Restore the job even if a measurement fails.
+
+With each phase, compare the detailed log's actual
+`frontmostProcess` transitions and window constraint failures
+per transition, not just aggregate error counts or burst count.
+Small bursts without a focus transition are separate controls.
+If the service cannot be restored, stop the experiment and
+restore its original LaunchAgent configuration before more work.
+
+This is a **proposed** A/B/A test, not a claim that SketchyVim causes
+WindowServer errors, and it should not be automated to disable
+SketchyVim permanently.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
