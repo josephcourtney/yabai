@@ -145,32 +145,61 @@ The 30-second `focus-zen-01` phase ran from 14:27:09.252 to
 | 1 | 14:27:12.335 | 14:27:12.545 | 109 | 210 ms |
 | 2 | 14:27:28.643 | 14:27:28.880 | 109 | 237 ms |
 
-The first burst occurred 3.083 seconds after the phase began, consistent
-with the requested manual Kitty-to-Zen activation. A second burst
-occurred 16.308 seconds later. The summary log **does not record**
-frontmost-app changes, so neither burst has yet been causally assigned
-to focus activation. The repeated size of 109 instead of the earlier
-59 demonstrates that burst size is not fixed across sessions. It is
-not evidence of exactly 109 failed windows.
+The contextual `log show --info` output confirms **two opposite application
+activations** while no yabai daemon was running:
 
-Before performing further window-management experiments, inspect detailed
-WindowServer and Dock activity at both burst times. For example:
+| Event | Zen activation | Kitty activation |
+| --- | --- | --- |
+| Frontmost app change | 14:27:12.023–.026 to Zen PID 817 | 14:27:28.329–.331 to Kitty PID 99463 |
+| SkyLight connection | 5e803 (Zen) | 69123 (Kitty) |
+| Failed ping notices | Four, 14:27:12.021–.022 | Four, 14:27:28.328–.329 |
+| Transaction timeouts | Ten, 14:27:12.045 and .285 | Ten, 14:27:28.466 and .538 |
+| Invalid-window burst | 109 at 14:27:12.335–.545 | 109 at 14:27:28.643–.880 |
 
-```sh
-log show --style compact --info \
-  --start '2026-11-04 14:27:10' \
-  --end '2026-11-04 14:27:31' \
-  --predicate '(process == "WindowServer" OR process == "Dock" OR process == "SystemUIServer")' \
-  > /tmp/yabai-windowserver-context-1427.log
-```
+The four ping notices name **the same PIDs** (28948, 1139, 773,
+606) on both transitions. Both bursts were preceded by deferred
+window ordering, key/main-appearance changes, and ten transaction
+timeouts. Some of the order/appearance changes involve other SkyLight
+connections besides the newly frontmost application. **The available
+log does not identify which client invoked the invalid constraint
+operation, whether those four processes are a cause or consequence of
+the transition, or whether any focus change was unusually slow to the
+user.**
 
-Check if both bursts follow actual `frontmostProcess`,
-`DoDeferredOrdering`, `OrderWindow`, or transaction-timeout messages.
-A Kitty-only control, repeated Zen activation controls, and another-app
-activation control should follow only if these detailed events indicate
-that doing so could discriminate the source. Avoid conflating background
-timers with focus transitions, and do not start another yabai daemon for
-this investigation.
+This revises the prior hypothesis: the second 109-error burst was
+**Zen → Kitty**, not unexplained background activity. The common
+observable condition is app activation/ordering, **not specifically
+Zen becoming frontmost**. Together with daemon-free captures, this
+makes yabai's reconciliation polling and BSP tiling much weaker
+candidates for the invalid-constraint burst. Prior scripting-addition
+state cannot be ruled out.
+
+An exact repeated burst size (109 here; 59 in an earlier capture)
+is not evidence of 109 or 59 distinct windows.
+
+### Discriminating follow-up (no yabai daemon)
+
+Rather than change yabai source or perform BSP mutations, use
+repeated, bounded, explicitly annotated activation trials:
+
+1. Kitty → Zen, then Zen → Kitty; record the **time and direction** of
+   each intentional transition and examine the associated bursts.
+2. Kitty → another ordinary app, then back. This discriminates whether
+   the problem is Zen-specific or broader application switching.
+3. Where feasible, switch between two non-Zen apps. Repeat without
+   switching as a control.
+4. If every app-switch direction reproduces the same ping/timeout/error
+   signature, correlate the four repeatedly unresponsive PIDs with
+   running process names using `ps -p 28948,1139,773,606 -o pid,ppid,comm,args`
+   **while those PIDs still exist**. PID reuse makes historical
+   identities unreliable. Do not kill the processes based on these
+   messages.
+
+The collector brackets errors but does not itself record which app
+received focus. Continue using a separate bounded `log show --info`
+capture for causal ordering. The focus-transition evidence is strong
+temporal correlation, **not** attribution of an underlying defect.
+
 
 ## Code paths to distinguish
 
