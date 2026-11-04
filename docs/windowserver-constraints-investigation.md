@@ -364,6 +364,46 @@ WindowServer APIs. Before proposing an A/B disabling test,
 inspect how the executable is launched and what it does.
 Do not change Jamf, Apple services, or launchd definitions.
 
+## Live process snapshot and `svim` signature (2026-11-04)
+
+A later `ps`, `file`, `ls -l` and `codesign -dv` read-only check
+confirmed that the four repeated ping recipients were still running:
+
+| PID | State | CPU | Memory | Notes |
+| --- | --- | ---: | ---: | --- |
+| 606 | `Ss` | 2.3% | 0.1% | JamfDaemon, root (UID 0) |
+| 773 | `S` | 0.0% | 0.0% | universalaccessd, UID 503 |
+| 1139 | `S` | 0.0% | 0.1% | `~/.local/bin/svim`, UID 503 |
+| 28948 | `S` | 0.0% | 0.0% | studentd, UID 503 |
+
+The `svim` executable is a 2,222,192-byte native ARM64 Mach-O
+binary dated September 16, 2026, signed September 16 at 14:42:47.
+Its signing identifier is `com.josephcourtney.svim`, signing
+authority `svim-local`, with no Team ID. No special code-signing
+flags were reported. These details establish local provenance, **not
+the tool's function**, launch mechanism, entitlements, Accessibility
+permissions, or whether it sends window/focus events.
+
+All four processes were sleeping at the sampled instant; there was
+no conspicuous CPU/memory load. A momentary snapshot cannot rule out
+earlier deadlocks or response latency at the exact WindowServer ping
+times. Do not terminate managed/Apple processes based on ping messages.
+
+To investigate `svim` without running it or stopping it, first
+inspect its currently loaded framework dependencies, open handles,
+and launch context using read-only commands such as:
+
+```sh
+otool -L "$HOME/.local/bin/svim"
+lsof -nP -p 1139
+launchctl print "gui/$(id -u)" | grep -i -C 3 -F 'svim'
+```
+
+Check for event taps or Accessibility API interactions only after
+establishing what `svim` is and how it is launched. The executable's
+identifier alone is insufficient to attribute the failures. No
+production yabai change is justified by this snapshot.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
