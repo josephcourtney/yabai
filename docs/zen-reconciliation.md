@@ -162,6 +162,13 @@ longer reproduce the defect; that is not a failure of the fallback.
 
 ### Separate unresolved WindowServer error investigation
 
+A read-only, phase-bounded probe and controlled investigation procedure are
+available in [windowserver-constraints-investigation.md](windowserver-constraints-investigation.md).
+The experiment separately samples no-daemon, reconciliation OFF/ON, BSP/FLOAT,
+and automatic-sublayer conditions. The diagnostic scripts do not manipulate
+windows, restart services, or change configuration.
+
+
 - The WindowServer emitted intermittent
   `_CGXPackagesSetWindowConstraints: Invalid window` bursts during desktop
   operations. The `just qualify-running` 30-second counts included 195 at
