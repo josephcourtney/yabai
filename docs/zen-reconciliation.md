@@ -60,22 +60,40 @@ open an initial Zen window there. Label only that Space:
 just qualify-running
 ```
 
-Substitute the verified Space index and persistent ID below. These commands
-only inspect the daemon and write local qualification state; **the operator
-performs all window creation, dragging, closing and Space switching manually.**
+**The label is not sufficient.** Verify that `type` is `bsp` and
+`has-focus` is `true`. A floating Space is *not* suitable: `--dump-layout`
+is BSP-only. On 2026-11-04 the first live attempt targeted Space index 5,
+persistent ID 211, which was `type=float` with two existing windows.
+The baseline consequently failed; later phases failed only because no
+baseline state file existed. This was a harness precondition failure, not
+evidence that Zen reconciliation failed. Do **not** switch that or any
+other real work Space to BSP just to make the test pass. Create/select a
+separate disposable BSP Space using deliberate user-controlled operations.
+
+The first test Zen window should have several tabs so detaching one does
+not close its source window. Do not start the next phase unless the preceding
+phase prints `PASS` and records the state file.
+
+Set the *verified* Space index and stable ID as shell variables, then run
+these commands in sequence. The qualification script only inspects the
+daemon and writes local state; **the operator performs all window creation,
+dragging, closing and Space switching manually.**
 
 ```sh
-just qualify-zen baseline <INDEX> <ID>
+space_index=REPLACE_WITH_INDEX
+space_id=REPLACE_WITH_ID
+
+just qualify-zen baseline "$space_index" "$space_id"
 # Open one ordinary new Zen window; allow about two seconds.
-just qualify-zen ordinary <INDEX> <ID>
-# Detach one tab into a new window; allow about two seconds.
-just qualify-zen detach1 <INDEX> <ID>
-# Detach another tab into a new window; allow about two seconds.
-just qualify-zen detach2 <INDEX> <ID>
+just qualify-zen ordinary "$space_index" "$space_id"
+# Detach one tab (without closing its source window); allow about two seconds.
+just qualify-zen detach1 "$space_index" "$space_id"
+# Detach another tab (without closing its source window); allow about two seconds.
+just qualify-zen detach2 "$space_index" "$space_id"
 # Switch to a different Space and return to the test Space.
-just qualify-zen returned <INDEX> <ID>
+just qualify-zen returned "$space_index" "$space_id"
 # Close just the two detached windows, keeping original and ordinary.
-just qualify-zen closed <INDEX> <ID>
+just qualify-zen closed "$space_index" "$space_id"
 ```
 
 Each phase fails closed unless the same active, labeled persistent Space ID is
@@ -116,8 +134,16 @@ longer reproduce the defect; that is not a failure of the fallback.
 - **Observed 2026-11-04 on integration revision `3fb3bfeb`:** `--refresh`
   found two missing Zen windows; explicitly enabled reconciliation then
   registered and visibly tiled a detached Zen window automatically.
+- **2026-11-04 local build:** 52 Python tests, two native C tests,
+  signed ARM64 build and commit/build-stamp verification passed for
+  `5a31035dcba1`. These results predate the qualification-harness corrections.
+- **2026-11-04 failed live acceptance:** running binary identity and build
+  provenance passed, but Space 211 was floating and the baseline could not
+  dump its BSP tree. None of the later stages were exercised. The observed
+  WindowServer invalid-window rate peaked at 130 per 30 seconds; this is a
+  safety/diagnostic concern, not attributable to yabai without isolation.
 - **Not yet established for this branch:** newly compiled default-on
-  initialization, end-to-end staged tests, busy-process latency, sleep/wake,
-  and cross-Space repeated detachment/closure.
+  initialization, end-to-end staged tests on a disposable BSP Space,
+  busy-process latency, sleep/wake, and cross-Space repeated detachment/closure.
 
 No GitHub Actions or system-wide service modifications are part of this work.
