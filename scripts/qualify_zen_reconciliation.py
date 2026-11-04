@@ -24,18 +24,54 @@ class QualificationError(RuntimeError):
 
 
 def command(binary: Path, *args: str) -> str:
-    result = subprocess.run(
-        [str(binary), "-m", *args], capture_output=True, text=True,
-        check=True, timeout=15,
-    )
+    try:
+        result = subprocess.run(
+            [str(binary), "-m", *args], capture_output=True, text=True,
+            check=True, timeout=15,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip() or f"exit {exc.returncode}"
+        raise QualificationError(
+            f"yabai {' '.join(args)} failed: {detail}"
+        ) from exc
     return result.stdout.strip()
 
 
-def read_snapshot(binary: Path, space_index: int) -> dict:
-    """Query the daemon without changing a window, a Space, or config."""
+def require_test_space(spaces: list[dict], space_index: int, space_id: int) -> dict:
+    """Fail closed before querying a BSP tree or recording phase state."""
+    matches = [s for s in spaces if s.get("index") == space_index]
+    if len(matches) != 1:
+        raise QualificationError("Space index missing or ambiguous")
+    space = matches[0]
+    if space.get("id") != space_id:
+        raise QualificationError("Space ID changed; refusing to retarget")
+    if space.get("label") != SPACE_LABEL:
+        raise QualificationError("requires a Space labeled yabai-zen-qualification")
+    if space.get("type") != "bsp":
+        raise QualificationError(
+            f"qualification Space must be active and BSP: Space {space_index} "
+            f"(ID {space_id}) has layout {space.get('type')!r}; "
+            "select a disposable BSP Space; do not convert a work Space"
+        )
+    if space.get("has-focus") is not True:
+        raise QualificationError("qualification Space must be active and BSP (not focused)")
+    return space
+
+
+def read_snapshot(binary: Path, space_index: int, space_id: int) -> dict:
+    """Validate Space identity/layout before reading its BSP tree."""
+    spaces = json.loads(command(binary, "query", "--spaces"))
+    require_test_space(spaces, space_index, space_id)
+    windows = json.loads(command(binary, "query", "--windows"))
+    if not any(w.get("app") == "Zen" and w.get("space") == space_index
+               for w in windows):
+        raise QualificationError(
+            f"no registered Zen window on Space {space_index}; "
+            "open a Zen window in the disposable BSP Space before baseline"
+        )
     return {
-        "spaces": json.loads(command(binary, "query", "--spaces")),
-        "windows": json.loads(command(binary, "query", "--windows")),
+        "spaces": spaces,
+        "windows": windows,
         "layout": json.loads(command(binary, "space", str(space_index), "--dump-layout")),
         "reconciliation": command(binary, "config", "window_reconciliation"),
         "interval": int(command(binary, "config", "window_reconciliation_interval")),
@@ -56,16 +92,7 @@ def observed_zen_ids(snapshot: dict, space_index: int, space_id: int) -> set[int
     if not 250 <= snapshot["interval"] <= 10000:
         raise QualificationError("invalid reconciliation interval")
 
-    matches = [s for s in snapshot["spaces"] if s.get("index") == space_index]
-    if len(matches) != 1:
-        raise QualificationError("Space index missing or ambiguous")
-    space = matches[0]
-    if space.get("id") != space_id:
-        raise QualificationError("Space ID changed; refusing to retarget")
-    if space.get("label") != SPACE_LABEL:
-        raise QualificationError("requires a Space labeled yabai-zen-qualification")
-    if space.get("type") != "bsp" or space.get("has-focus") is not True:
-        raise QualificationError("qualification Space must be active and BSP")
+    space = require_test_space(snapshot["spaces"], space_index, space_id)
 
     all_ids = [w["id"] for w in snapshot["windows"]]
     if len(all_ids) != len(set(all_ids)):
@@ -172,8 +199,14 @@ def main() -> int:
                 raise QualificationError("state file already exists; use a fresh path")
             state = None
         else:
+            if not args.state.is_file():
+                raise QualificationError(
+                    f"baseline state missing at {args.state}; "
+                    "run baseline successfully on a disposable BSP Space "
+                    "before attempting later phases"
+                )
             state = json.loads(args.state.read_text())
-        snapshot = read_snapshot(args.binary, args.space_index)
+        snapshot = read_snapshot(args.binary, args.space_index, args.space_id)
         next_state = advance(args.phase, state, snapshot, args.binary,
                              args.space_index, args.space_id)
         store_state(args.state, next_state)
