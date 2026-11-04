@@ -169,8 +169,8 @@ def finish(directory: Path, label: str) -> dict:
         )
     pids_after = yabai_pids()
     captured = retrieve_log(started, ended)
-    start_local = started.astimezone().replace(tzinfo=None)
-    end_local = ended.astimezone().replace(tzinfo=None)
+    start_local = started.replace(tzinfo=None)
+    end_local = ended.replace(tzinfo=None)
     events = [t for t in parse_events(captured) if start_local <= t <= end_local]
     output = {
         **state,
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="action", required=True)
     for name in ("start", "finish", "idle"):
         sub = commands.add_parser(name)
-        sub.add_argument("phase", type=valid_label)
+        sub.add_argument("phase")
         sub.add_argument("--dir", type=Path, default=DEFAULT_DIR)
         if name == "idle":
             sub.add_argument("--seconds", type=int, default=30)
@@ -209,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "analyze":
             result = summarize(parse_events(args.file.read_text(encoding="utf-8")))
         else:
+            valid_label(args.phase)
             if sys.platform != "darwin":
                 raise DiagnosticError("live phase capture requires macOS")
             if args.action == "start":
