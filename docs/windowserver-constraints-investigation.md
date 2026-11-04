@@ -80,6 +80,59 @@ value of a single BSP ON/OFF comparison. Prefer synchronized observations
 with precisely recorded operations and repeated controls before assigning
 a window-management cause.
 
+## Context log: 12:46:25 daemon-free 59-error burst
+
+A separate `log show --info` capture of 12:46:23–28, limited to
+WindowServer, Dock and SystemUIServer, supplies the following sequence:
+
+| Local timestamp | Observed event |
+| --- | --- |
+| 12:46:25.407–.408 | WindowServer reports processes 1139, 773 and 606 failed to act on dequeued pings before timeout |
+| 12:46:25.408–.416 | Window ordering and frontmost-app transition to Zen (PID 817; SkyLight connection 5e803) |
+| 12:46:25.436 | Seven WindowServer transaction timeouts (27238–27244) |
+| 12:46:25.587–.692 | Several key/main-appearance and order-window changes across multiple connections |
+| 12:46:25.682 | Three further transaction timeouts (27245–27247) |
+| 12:46:25.718–.890 | Exactly 59 `_CGXPackagesSetWindowConstraints: Invalid window` messages |
+| 12:46:27.115–.116 | Dock BackgroundTaskManagement user-data-change notifications, **after** the burst |
+
+The burst closely follows a change in frontmost application to Zen and
+multiple WindowServer ordering/appearance updates. Since yabai's process
+list was empty throughout the enclosing measurement, **the daemon is not
+required for this sequence**. The log is consistent with a macOS
+activation/ordering problem or one originating in a client participating
+in this transition; it does **not** identify which client issued the
+invalid constraint request. The transaction timeouts and ping timeouts
+may be associated with transient responsiveness problems but cannot
+establish an actual user-visible input freeze.
+
+**Important qualification:** The phase was designated "idle," but its
+log proves that Zen became frontmost within that interval. We do not
+know whether this resulted from operator interaction, another program
+activating Zen, or a window-system behavior. Thus `no-daemon-02`
+cannot be treated as a strictly no-interaction idle control. The
+six-error `:58` events also require independent attribution.
+
+**Next priority: test focus activation rather than mutate yabai:**
+
+1. With no yabai daemon, bracket manually switching **Kitty → Zen**
+   using a fresh unique phase label, record the exact action time and
+   do not create/close/reposition any windows. Repeat at least three
+   times with fresh labels and inspect both burst sizes and transaction
+   timeout messages.
+2. Repeat **Zen → Kitty** and a comparable **Kitty → another app**
+   activation (where applicable). Keep the same screen/Space.
+3. Repeat the same comparisons with yabai running but reconciliation
+   OFF, then ON, only if the daemon-free activation controls are stable.
+4. If 59-error bursts are tightly tied to Zen activation without
+   yabai, prioritize Zen/macOS WindowServer behavior over BSP or the
+   scripting addition. Capture the immediately preceding foreground
+   transitions and ordering requests for each occurrence.
+
+These are tests to discriminate causes, not a claim that Zen is defective.
+The current phase collector logs the constraint errors, not all
+transaction/activation messages; use a separate bounded `log show --info`
+query for any stage where those messages matter.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
