@@ -674,6 +674,46 @@ named label. Compare periodic burst count/phase and absence of
 service or daemon. If meaningful unresponsiveness appears, stop
 interactive tests and collect a separately timed incident record.
 
+## Uninterrupted 130-second baseline (2026-11-04 16:15–16:17 EST)
+
+The user ran `just ws-idle periodic-no-switch-01 130` with no
+yabai PIDs detected at the beginning or end. The diagnostic
+recorded **240** `_CGXPackagesSetWindowConstraints: Invalid window`
+messages across four bursts:
+
+| Start | End | Count | Duration |
+| --- | --- | ---: | ---: |
+| 16:15:58.852 | 16:15:58.876 | 11 | 24 ms |
+| 16:16:58.855 | 16:16:58.876 | 11 | 21 ms |
+| 16:17:45.299 | 16:17:45.437 | 109 | 138 ms |
+| 16:17:48.295 | 16:17:48.449 | 109 | 154 ms |
+
+Phase interval 16:15:40.982501–16:17:51.026440,
+elapsed 130.044 seconds. The two 11-message bursts begin
+**60.003 s** apart and align with the previous 15:59:58.857
+and 16:00:58.859 events. This strengthens a once-per-minute
+wall-clock-aligned mechanism that does not require yabai
+or SketchyVim. The exact source remains unknown.
+
+The two **109-message** bursts occur ~2.996 seconds apart in
+the same nominally no-switch capture. They establish that a
+*deliberate user-triggered app activation* is not a necessary
+stated precondition, but the summary does not independently
+verify that no automatic foreground, display, window, or Space
+change occurred. The previous "activation-associated" signature
+should therefore be broadened to **large nonperiodic bursts,
+often accompanying activation**, not described as activation-only.
+
+**Next evidence collection (read-only):** obtain all
+WindowServer, Dock and SystemUIServer messages spanning
+16:17:43–16:17:50 to check whether both 109-error groups
+follow a frontmost-app change, `DoDeferredOrdering`,
+client ping failures, transaction timeouts, display transitions,
+or another event. A wider 16:15:56–16:16:01 and
+16:16:56–16:17:01 slice may identify the source of the
+minute-aligned 11-message groups. Do not attribute a process
+without a corresponding client/request ID or intervention.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
