@@ -192,7 +192,7 @@ def test_abandon_preserves_evidence_and_allows_new_phase(tmp_path, monkeypatch):
     assert module.begin(tmp_path, "new_phase")["phase"] == "new_phase"
 
 
-@pytest.mark.parametrize("reason", ["", "  ", "bad\\nreason", "x" * 201])
+@pytest.mark.parametrize("reason", ["", "  ", "bad\nreason", "x" * 201])
 def test_abandon_requires_usable_reason(tmp_path, monkeypatch, reason):
     monkeypatch.setattr(module, "yabai_pids", lambda: [])
     module.begin(tmp_path, "phase")
