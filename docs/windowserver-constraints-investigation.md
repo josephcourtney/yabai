@@ -246,6 +246,76 @@ If degraded pointer/keyboard responsiveness occurs, suspend interactive
 trials. Do not kill WindowServer or change Dock/SIP settings as an
 unvalidated workaround.
 
+## Correlated non-Zen activation log (2026-11-04 14:46:56–14:47:19)
+
+The complete context log for the `focus-other-01` phase contains
+491 invalid-window errors. It confirms repeated changes in which
+application was frontmost **without a yabai daemon**, including the
+following SkyLight `DoDeferredOrdering` events:
+
+| Frontmost at | Application | Invalid-window burst following |
+| --- | --- | --- |
+| 14:46:57.736 | Messages (PID 843) | 120 at 14:46:58.037–.960 |
+| 14:47:00.415 | Finder (PID 877) | 19 at 14:47:00.725–.927 |
+| 14:47:01.934 | Kitty | 109 at 14:47:02.237–.511 |
+| 14:47:04.416 | Slack | 99 at 14:47:04.729–.957 |
+| 14:47:06.003 | Kitty | 119 errors before the next activation |
+| 14:47:06.912 | Zen | 11 errors before the next activation |
+| 14:47:07.556 | Kitty | 11 errors through 14:47:07.860 |
+
+The final three subgroups are combined into the single 141-error
+`14:47:06.020–14:47:07.860` burst by the parser's *one-second
+maximum inter-event gap*. **It is not one uninterrupted two-second
+failure.** These counts are grouped by observed activation time,
+not assigned causally to individual clients.
+
+At 14:47:17.010–.011, four ping failures occurred for PIDs
+**28948, 1139, 773 and 606**, followed by a separate three-error
+invalid-window burst at 14:47:17.264–.342. There is **no new
+frontmost-app transition** in the immediately preceding seconds.
+The same four PIDs were reported at 14:46:57.731–.732. This is
+evidence of a broader problem than foreground-application changes
+alone (e.g. periodic WindowServer housekeeping or a persistent
+client connection), and the failed pings deserve separate study.
+
+A programmatic count of the context log yields:
+- **491** `_CGXPackagesSetWindowConstraints: Invalid window` entries.
+- **2,162** `transaction … timed out` log entries, but only **768
+  distinct transaction numbers** (some logged repeatedly). Do not
+  equate the number of log lines with distinct new transaction
+  failures.
+- **Eight** failed-ping log entries (four PIDs reported twice).
+- **24** `Unsupported image function XRGB` entries, concentrated
+  around earlier activation/rendering changes. This is a distinct
+  compositor diagnostic and has no confirmed causal association.
+
+The shared signature across Messages, Finder, Kitty, Slack and Zen
+strongly weakens a Zen-specific diagnosis. These observations do not
+prove a macOS-only bug: an unrelated third-party app, a persistent
+scripting-addition effect, or another shared window-system client
+could still be involved. There is no basis to modify the yabai BSP
+or reconciliation paths to suppress these messages.
+
+### Highest-value follow-up
+
+First identify the repeatedly failed ping recipients while they are
+still alive:
+
+```sh
+ps -p 28948,1139,773,606 -o pid,ppid,comm,args
+```
+
+Record missing PIDs and PID-reuse limitations. Do not kill any process
+solely because it appears in a timeout message. Where safe, perform
+a noninteractive control with no application switching to determine
+whether ping failures and small invalid-window bursts recur.
+
+If a real input freeze returns, capture an appropriately authorized
+WindowServer diagnostic report or `spindump` after ensuring it will
+not disrupt the machine. A separate incident report should correlate
+time of symptoms, current process identities and logs. Avoid
+automating invasive mitigation based on error counts.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
