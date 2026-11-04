@@ -561,6 +561,54 @@ This is a **proposed** A/B/A test, not a claim that SketchyVim causes
 WindowServer errors, and it should not be automated to disable
 SketchyVim permanently.
 
+## SketchyVim reversible A/B/A results (2026-11-04 15:59–16:01 EST)
+
+The operator ran the proposed test with yabai PIDs empty at both
+endpoints of all captures, temporarily booted out *only*
+`gui/503/com.josephcourtney.svim`, then restored that LaunchAgent via
+`launchctl bootstrap`. The restored instance is running as PID
+**10457**. A normal, single service appears to have been restored.
+
+| Phase | SketchyVim | WindowServer invalid-window errors | Bursts |
+| --- | --- | ---: | --- |
+| `svim-on-before-01` | ON | 22 | 11 at 15:59:58.857–.878; 11 at 16:00:00.377–.381 |
+| `svim-off-01` | OFF | 11 | 11 at 16:00:58.859–.878 |
+| `svim-on-after-01` | ON, restored | 0 | None |
+
+The ON-before measurement was 15:59:50.059–16:00:20.096,
+OFF was 16:00:33.103–16:01:03.136, and ON-after was
+16:01:05.283–16:01:35.318. Capture boundaries matter:
+the ON-after phase did not include 16:01:58, the time at which a
+later minute-aligned event might occur.
+
+**Interpretation:** SketchyVim is **not required** for a recurring
+11-error burst. The 15:59:58.857 and 16:00:58.859 bursts were
+60.002 seconds apart, and ON and OFF conditions each saw one.
+This supports a separate, approximately minute-aligned event
+(the earlier 6-error examples were near `:58`, too). The zero
+ON-after count does not establish remediation or permanent cessation.
+The A/B/A results do **not** implicate SketchyVim; further testing
+must account for wall-clock phase and actual focus transitions.
+The phase summaries do not contain frontmost-app transitions, so
+the intended Kitty → Messages → Kitty transitions are not verified
+from this output alone.
+
+The earlier `svim.err` and `svim.log` contents are **historical**:
+their file modification timestamps are Sep 16 at 13:57:04
+and Sep 16 at 13:36:03 respectively. Errors about
+`Accessibility not granted`, lock-file acquisition and missing
+`sketchybar` therefore cannot be treated as current November
+errors without timestamped corroboration.
+
+**Disposition:** leave the restored SketchyVim service running,
+avoid stopping managed or macOS services, and do not modify yabai
+geometry, sublayer or reconciliation code on this evidence.
+A low-risk next step is to inspect WindowServer context around
+15:59:58, 16:00:00 and 16:00:58 (or record future repeated
+minute-aligned events without focus switching). Compare
+`DoDeferredOrdering`, frontmost-app identity, ping/transaction
+timeouts, and the distinct periodic `:58` signature.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
