@@ -1161,9 +1161,10 @@ static struct selector parse_insert_selector(FILE *rsp, char **message)
     return result;
 }
 
-// Auto-reconcile is opt-in. The dispatch timer runs on the main queue and
-// schedules a tick on yabai's event loop, where window tables are owned.
-static bool g_window_reconciliation_enabled = false;
+// Zen can create native windows without emitting an AX creation event.
+// Reconcile only Zen by default; users may opt out via config. The dispatch
+// timer runs on the main queue and posts to the owning event-loop thread.
+static bool g_window_reconciliation_enabled = true;
 static int g_window_reconciliation_interval_ms = 750;
 static dispatch_source_t g_window_reconciliation_timer;
 static bool g_window_reconciliation_pending;
@@ -3267,6 +3268,10 @@ bool message_loop_begin(char *socket_path)
 
     g_message_loop.is_running = true;
     pthread_create(&g_message_loop.thread, NULL, &message_loop_run, NULL);
+
+    // The event loop and window manager are initialized before this point.
+    // Start the Zen-only fallback even when yabairc does not set the option.
+    window_reconciliation_update_timer();
 
     return true;
 }
