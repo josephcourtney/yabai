@@ -437,6 +437,63 @@ Once verified, an explicitly controlled SketchyVim ON/OFF comparison
 while leaving yabai stopped is a useful next test. Do not stop
 `universalaccessd`, `studentd` or managed Jamf services.
 
+## SketchyVim launchd and log inspection (2026-11-04 15:49 EST)
+
+`launchctl print gui/503/com.josephcourtney.svim` confirms the live
+instance is a user LaunchAgent, managed by
+`~/Library/LaunchAgents/com.josephcourtney.svim.plist`, running
+`~/.local/bin/svim` as **PID 1139**. Launchd reports:
+`state=running`, `runs=1`, and `last exit code=(never exited)`.
+The job exposes a PID-local `com.apple.axserver` endpoint. This
+is compatible with SketchyVim's Accessibility integration, but it
+does not prove the origin of any invalid-window request.
+
+`brew services info svim` returned only a Homebrew *formula trust*
+error for `felixkratz/formulae/svim`; it **did not** report whether
+the Homebrew service itself is active. Do not grant formula/tap trust
+for the purpose of this diagnostic.
+
+The last 80 lines from the SketchyVim logs contained three distinct
+repeated messages:
+
+- `~/.config/svim/svim.sh: line 19: sketchybar: command not found`;
+- `svim already running? Error: Could not acquire lock-file.`;
+- `Accessibility not granted. Exit.`.
+
+Because the supplied log excerpts have **no timestamps**, it is
+not established whether these messages occurred recently or during
+older startup attempts. The current PID 1139 has remained running
+since Nov 2; lock failures and denied Accessibility checks may
+belong to *other* attempts rather than the current process.
+The shell callback may fail because `sketchybar` is absent or
+because it is not on the callback's PATH. None of these messages
+directly identifies the WindowServer constraint error source.
+
+**Read-only next steps:** identify the meaning of all registered
+SketchyVim jobs and inspect the execution context before attempting
+a reversible A/B test:
+
+```sh
+for label in com.josephcourtney.svim com.josephcourtney.svim-upstream-check homebrew.mxcl.svim sh.brew.svim; do
+  echo "== $label =="
+  launchctl print "gui/$(id -u)/$label" 2>&1 |
+    grep -E 'state =|path =|program =|pid =|runs =|last exit|KeepAlive|runatload|job state'
+done
+plutil -p "$HOME/Library/LaunchAgents/com.josephcourtney.svim.plist"
+stat -f '%Sm %z %N' -t '%Y-%m-%d %H:%M:%S' \
+  "$HOME/Library/Logs/svim.err" "$HOME/Library/Logs/svim.log"
+command -v sketchybar || true
+sed -n '1,45p' "$HOME/.config/svim/svim.sh"
+```
+
+The four-job check only inspects service registration/status; missing
+labels should be reported as such, not taken as evidence of an active
+duplicate. A proper A/B test must identify the one owning process,
+confirm restart behavior, and avoid inadvertently leaving SketchyVim
+disabled or launching several copies. Do not modify managed or Apple
+agents. Source binary/permissions investigation is separate from
+the already functionally qualified yabai Zen reconciliation fix.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
