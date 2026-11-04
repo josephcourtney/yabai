@@ -83,6 +83,11 @@ auto state="on":
     ./bin/yabai -m config window_reconciliation {{quote(state)}}
     ./bin/yabai -m config window_reconciliation
 
+# Read-only staged Zen tab-detachment qualification in a disposable BSP Space.
+# Requires a verified running daemon; only the local state JSON is written.
+qualify-zen phase space_index space_id state="/tmp/yabai-zen-qualification.json": qualify-running
+    python3 ./scripts/qualify_zen_reconciliation.py {{quote(phase)}} --binary ./bin/yabai --space-index {{quote(space_index)}} --space-id {{quote(space_id)}} --state {{quote(state)}}
+
 # Read-only audit of potential stale sublayers on floating Spaces.
 qualify-layers: qualify-running
     python3 ./scripts/qualify_layout_layers.py
