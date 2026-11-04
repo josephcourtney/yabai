@@ -1,5 +1,7 @@
 # Fork integration: correctness batch
 
+> **Current inventory (2026-11-04):** See [external fork integration inventory](fork-inventory-2026-11-04.md) for the refreshed feature-by-feature comparison and priorities. This document preserves the original 2026-11-02 correctness acceptance record; its "remaining independent integration phases" section predates the composed PR #7/Zen branch and is not the current feature-presence inventory. Neither draft PR #7 nor the Zen qualification branch has been merged into `master`.
+
 This document tracks the correctness and layer-restoration batches merged into `compat/macos-27.0.1` on 2026-11-02 (PRs #1 and #6). The default `master` branch has not been promoted.
 
 ## Incorporated sources
