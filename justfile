@@ -99,6 +99,14 @@ ws-start phase:
 ws-finish phase:
     python3 ./scripts/diagnose_windowserver.py finish {{quote(phase)}}
 
+# List active WindowServer phases to avoid overlapping measurements.
+ws-status:
+    python3 ./scripts/diagnose_windowserver.py status
+
+# Archive a stale/interrupted phase marker without deleting the evidence.
+ws-abandon phase reason:
+    python3 ./scripts/diagnose_windowserver.py abandon {{quote(phase)}} --reason {{quote(reason)}}
+
 # Parse a previously collected macOS WindowServer log without a daemon.
 ws-analyze file:
     python3 ./scripts/diagnose_windowserver.py analyze {{quote(file)}}
