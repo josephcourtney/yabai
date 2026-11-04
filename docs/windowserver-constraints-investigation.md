@@ -609,6 +609,71 @@ minute-aligned events without focus switching). Compare
 `DoDeferredOrdering`, frontmost-app identity, ping/transaction
 timeouts, and the distinct periodic `:58` signature.
 
+## Periodic 11-error signature vs activation-associated bursts (2026-11-04 15:59–16:01)
+
+A separate `log show --style compact --info` window covering
+15:59:56–16:01:01 (WindowServer only) was inspected programmatically.
+It has **33** `_CGXPackagesSetWindowConstraints: Invalid window`
+entries in exactly three groups of **11**:
+
+| Group | First error | Last error | SketchyVim state |
+| --- | --- | --- | --- |
+| A1 | 15:59:58.857 | 15:59:58.878 | running PID 1139 |
+| A1 | 16:00:00.377 | 16:00:00.381 | running PID 1139 |
+| B | 16:00:58.859 | 16:00:58.878 | stopped |
+
+The first and last groups started **60.002 s** apart across
+SketchyVim state change. The detailed WindowServer context includes
+**zero** `DoDeferredOrdering` events, **zero** failed-ping notices
+and **zero** `transaction N timed out` messages within this
+entire window. There is one keyboard focus-policy reevaluation at
+16:00:32.969 explicitly caused by SketchyVim's termination; it is
+not accompanied by invalid-window errors.
+
+The log confirms `Process death: ... (svim)`, PID 1139, at
+16:00:32.967 and its SkyLight connection
+`0xb4b03` closing with `ownedWindowCount=0`. This validates
+that the OFF arm genuinely removed the old SketchyVim client from
+WindowServer. The third 11-error group occurred 25.9 seconds later,
+with the client gone.
+
+An `HID activity: 1 -> 0` event precedes the first group by
+~1.135 s; no analogous event immediately precedes the other
+minute-aligned group. A sequence of display-3 brightness updates
+at 16:00:49–50 precedes the OFF group by ~8–9 seconds, so neither
+is currently an established initiating event.
+
+**Working distinction:** At least two observed operational
+signatures must be kept separate in analysis:
+
+1. **Small periodic:** 6 or 11 invalid-window log lines near
+   wall-clock `:58`, no observed focus transition or massive
+   transaction timeouts, persisting without both yabai and
+   SketchyVim. Periodicity is supported by multiple timestamps,
+   not yet proved over a long continuous no-input baseline.
+2. **Activation-associated:** 59/99/109/120/141-error grouped
+   bursts following distinct foreground changes, typically with
+   failed pings and high volumes of transaction timeouts. These
+   may reflect a separate cause or a greater amplification of
+   the same underlying invalid reference.
+
+Do not infer the error corresponds to a new distinct window per
+line, or that the grouped duration is total WindowServer blockage.
+The periodic result proves neither a harmless log-only bug nor a
+direct relationship to the earlier whole-desktop input freeze.
+Where possible quantify separate counters for no-input baseline
+and focus changes.
+
+**Safe next test:** with yabai absent and SketchyVim restored,
+run an uninterrupted 130-second `just ws-idle` capture without
+switching applications or moving windows; start at any time but
+record whether the interval actually includes two or more
+wall-clock `:58` boundaries. If needed repeat with a differently
+named label. Compare periodic burst count/phase and absence of
+`DoDeferredOrdering`. This experiment avoids changing another
+service or daemon. If meaningful unresponsiveness appears, stop
+interactive tests and collect a separately timed incident record.
+
 ## Code paths to distinguish
 
 - **BSP geometry:** src/space_manager.c, view flushes and
