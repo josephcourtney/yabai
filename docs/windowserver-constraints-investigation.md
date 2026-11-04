@@ -326,7 +326,7 @@ All had start times preceding both 14:27 and 14:47 captures:
 | --- | --- | --- | --- |
 | 606 | Nov 2 19:40:14 | `/Library/Application Support/JAMF/Jamf.app/Contents/MacOS/JamfDaemon…` | Jamf management daemon (administrative framework) |
 | 773 | Nov 2 19:40:22 | `/usr/sbin/universalaccessd` | macOS accessibility system service |
-| 1139 | Nov 2 19:41:02 | `~/.local/bin/svim` | User-local executable; its function is currently unknown |
+| 1139 | Nov 2 19:41:02 | `~/.local/bin/svim` | SketchyVim, accessibility-based Vim editing for macOS text fields (locally signed build) |
 | 28948 | Nov 4 13:27:54 | `/usr/libexec/studentd` | **Apple Classroom** student-control agent (not Screen Time) |
 
 Each process had `PPID=1`, indicating launchd parentage, but
@@ -358,10 +358,15 @@ ls -l "$HOME/.local/bin/svim"
 codesign -dv --verbose=2 "$HOME/.local/bin/svim" 2>&1
 ```
 
-The `svim` path is a user-local executable, not enough to infer
-its purpose or use of Accessibility, window-focus automation, or
-WindowServer APIs. Before proposing an A/B disabling test,
-inspect how the executable is launched and what it does.
+The user's desktop-reload configuration explicitly runs
+`brew services restart svim` under the label "Reloading SketchyVim".
+Upstream SketchyVim (https://github.com/FelixKratz/SketchyVim)
+implements Vim editing in macOS accessible text fields; it requests
+Accessibility permission and supports a `~/.config/svim/svimrc`
+configuration. This establishes the identity and expected functional
+domain of the running `svim`, but does not establish which exact
+APIs this locally built binary invokes during application activation.
+Before an A/B test, confirm which launchd job owns PID 1139.
 Do not change Jamf, Apple services, or launchd definitions.
 
 ## Live process snapshot and `svim` signature (2026-11-04)
@@ -380,9 +385,10 @@ The `svim` executable is a 2,222,192-byte native ARM64 Mach-O
 binary dated September 16, 2026, signed September 16 at 14:42:47.
 Its signing identifier is `com.josephcourtney.svim`, signing
 authority `svim-local`, with no Team ID. No special code-signing
-flags were reported. These details establish local provenance, **not
-the tool's function**, launch mechanism, entitlements, Accessibility
-permissions, or whether it sends window/focus events.
+flags were reported. These details establish local provenance, but **not** equivalence
+to the upstream SketchyVim build, its launch mechanism, entitlements,
+granted Accessibility permissions, or the exact handling of window
+and focus events.
 
 All four processes were sleeping at the sampled instant; there was
 no conspicuous CPU/memory load. A momentary snapshot cannot rule out
@@ -399,10 +405,37 @@ lsof -nP -p 1139
 launchctl print "gui/$(id -u)" | grep -i -C 3 -F 'svim'
 ```
 
-Check for event taps or Accessibility API interactions only after
-establishing what `svim` is and how it is launched. The executable's
-identifier alone is insufficient to attribute the failures. No
-production yabai change is justified by this snapshot.
+The inspection confirms a GUI/Accessibility-capable process:
+`otool -L` lists Cocoa, Carbon, AppKit, ApplicationServices,
+CoreGraphics and other frameworks; `lsof` reports the `svimrc`
+file, `~/Library/Logs/svim.log`, `svim.err`, and a lock file.
+The executable's identifier and linked frameworks are insufficient
+to attribute WindowServer errors or demonstrate use of a particular
+event tap. No production yabai change is justified.
+
+A previous October 22 WindowServer log recorded SketchyVim
+checking in as an application, acquiring a SkyLight connection, and
+nearby TCC access checks. This is consistent with its accessibility
+role, **not** proof that it originated the later constraint failures.
+
+**Inspect before any A/B stop:**
+
+```sh
+launchctl print "gui/$(id -u)/com.josephcourtney.svim"
+brew services info svim
+sed -n '1,120p' "$HOME/.config/svim/svimrc"
+tail -n 80 "$HOME/Library/Logs/svim.err"
+tail -n 80 "$HOME/Library/Logs/svim.log"
+```
+
+The launchd listing also contained `com.josephcourtney.svim-upstream-check`,
+`homebrew.mxcl.svim`, and `sh.brew.svim`. Their appearance in
+service-registration and enablement output does **not** establish that
+multiple processes are active; confirm the owning job and any
+KeepAlive/restart policy before choosing a reversible service stop.
+Once verified, an explicitly controlled SketchyVim ON/OFF comparison
+while leaving yabai stopped is a useful next test. Do not stop
+`universalaccessd`, `studentd` or managed Jamf services.
 
 ## Code paths to distinguish
 
