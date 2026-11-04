@@ -88,6 +88,21 @@ auto state="on":
 qualify-zen phase space_index space_id state="/tmp/yabai-zen-qualification.json": qualify-running
     python3 ./scripts/qualify_zen_reconciliation.py {{quote(phase)}} --binary ./bin/yabai --space-index {{quote(space_index)}} --space-id {{quote(space_id)}} --state {{quote(state)}}
 
+# Record WindowServer errors during an idle interval (no desktop mutation).
+ws-idle phase seconds="30":
+    python3 ./scripts/diagnose_windowserver.py idle {{quote(phase)}} --seconds {{quote(seconds)}}
+
+# Bracket a manually performed desktop operation with read-only timestamps.
+ws-start phase:
+    python3 ./scripts/diagnose_windowserver.py start {{quote(phase)}}
+
+ws-finish phase:
+    python3 ./scripts/diagnose_windowserver.py finish {{quote(phase)}}
+
+# Parse a previously collected macOS WindowServer log without a daemon.
+ws-analyze file:
+    python3 ./scripts/diagnose_windowserver.py analyze {{quote(file)}}
+
 # Read-only audit of potential stale sublayers on floating Spaces.
 qualify-layers: qualify-running
     python3 ./scripts/qualify_layout_layers.py
