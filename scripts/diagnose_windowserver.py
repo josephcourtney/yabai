@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
+import fcntl
 from datetime import datetime, timedelta
 import json
 import os
@@ -112,28 +114,95 @@ def _file_set(directory: Path, label: str) -> tuple[Path, Path, Path]:
     )
 
 
+@contextmanager
+def phase_lock(directory: Path):
+    """Serialize phase starts/completions across independent CLI processes."""
+    directory.mkdir(parents=True, exist_ok=True)
+    lock_path = directory / ".phase.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def active_labels(directory: Path) -> list[str]:
+    return sorted(
+        path.name.removesuffix(".active.json")
+        for path in directory.glob("*.active.json")
+    )
+
+
+def status(directory: Path) -> dict:
+    active = []
+    for label in active_labels(directory):
+        try:
+            state = json.loads((directory / f"{label}.active.json").read_text(encoding="utf-8"))
+            active.append({"phase": label, "started": state.get("started")})
+        except (OSError, ValueError):
+            active.append({"phase": label, "started": None})
+    return {"active": active}
+
+
 def begin(directory: Path, label: str) -> dict:
     active, report, raw = _file_set(directory, label)
-    if report.exists() or raw.exists():
-        raise DiagnosticError(f"phase {label!r} already completed; use a new label")
-    directory.mkdir(parents=True, exist_ok=True)
-    state = {
-        "phase": label,
-        "started": local_now().isoformat(timespec="microseconds"),
-        "yabai_pids_before": yabai_pids(),
-    }
-    try:
-        # Exclusive creation prevents accidentally overwriting a live phase.
+    with phase_lock(directory):
+        if report.exists() or raw.exists():
+            raise DiagnosticError(f"phase {label!r} already completed; use a new label")
+        other = active_labels(directory)
+        if label in other:
+            raise DiagnosticError(
+                f"phase {label!r} already active; finish or abandon it before starting again"
+            )
+        if other:
+            raise DiagnosticError(
+                f"another phase is active ({', '.join(other)}); "
+                "finish or abandon all active phases before starting a new one"
+            )
+        if (directory / f"{label}.abandoned.json").exists():
+            raise DiagnosticError(f"phase {label!r} was abandoned; use a new label")
+        state = {
+            "phase": label,
+            "started": local_now().isoformat(timespec="microseconds"),
+            "yabai_pids_before": yabai_pids(),
+        }
+        # The directory lock and exclusive creation prevent concurrent phases.
         with active.open("x", encoding="utf-8") as file:
             os.chmod(active, 0o600)
             json.dump(state, file, indent=2, sort_keys=True)
             file.write("\n")
-    except FileExistsError as exc:
-        raise DiagnosticError(
-            f"phase {label!r} already active; finish it before starting again"
-        ) from exc
-    return state
+        return state
 
+
+def abandon(directory: Path, label: str, reason: str) -> dict:
+    """Archive an interrupted/overlapping phase; never discard evidence."""
+    valid_label(label)
+    reason = reason.strip()
+    if not reason or len(reason) > 200 or any(ord(c) < 32 for c in reason):
+        raise DiagnosticError("abandon reason must be 1..200 printable characters")
+    active, _, _ = _file_set(directory, label)
+    archived = directory / f"{label}.abandoned.json"
+    with phase_lock(directory):
+        if not active.is_file():
+            raise DiagnosticError(f"no active phase {label!r} to abandon")
+        if archived.exists():
+            raise DiagnosticError("abandon archive already exists; refusing to overwrite")
+        state = json.loads(active.read_text(encoding="utf-8"))
+        if state.get("phase") != label:
+            raise DiagnosticError("active phase identity does not match")
+        output = {
+            **state,
+            "abandoned_at": local_now().isoformat(timespec="microseconds"),
+            "abandon_reason": reason,
+        }
+        with archived.open("x", encoding="utf-8") as file:
+            os.chmod(archived, 0o600)
+            json.dump(output, file, indent=2, sort_keys=True)
+            file.write("\n")
+        active.unlink()
+        return output
 
 def retrieve_log(started: datetime, ended: datetime) -> str:
     # log show accepts local date/time at whole-second precision. Widen the
@@ -154,74 +223,83 @@ def retrieve_log(started: datetime, ended: datetime) -> str:
 
 def finish(directory: Path, label: str) -> dict:
     active, report, raw = _file_set(directory, label)
-    if not active.is_file():
-        raise DiagnosticError(f"no active phase {label!r}; run start first")
-    state = json.loads(active.read_text(encoding="utf-8"))
-    if state.get("phase") != label:
-        raise DiagnosticError("active phase identity does not match")
-    started = datetime.fromisoformat(state["started"])
-    ended = local_now()
-    if ended <= started:
-        raise DiagnosticError("end time is not after phase start")
-    if ended - started > timedelta(minutes=15):
-        raise DiagnosticError(
-            "phase exceeds 15 minutes; use a fresh phase label for a bounded run"
-        )
-    pids_after = yabai_pids()
-    captured = retrieve_log(started, ended)
-    start_local = started.replace(tzinfo=None)
-    end_local = ended.replace(tzinfo=None)
-    events = [t for t in parse_events(captured) if start_local <= t <= end_local]
-    output = {
-        **state,
-        "ended": ended.isoformat(timespec="microseconds"),
-        "elapsed_seconds": round((ended - started).total_seconds(), 3),
-        "yabai_pids_after": pids_after,
-        "pid_changed": state["yabai_pids_before"] != pids_after,
-        **summarize(events),
-    }
-    if report.exists() or raw.exists():
-        raise DiagnosticError("results already exist; refusing to overwrite")
-    with raw.open("x", encoding="utf-8") as file:
-        os.chmod(raw, 0o600)
-        file.write(captured)
-    with report.open("x", encoding="utf-8") as file:
-        os.chmod(report, 0o600)
-        json.dump(output, file, indent=2, sort_keys=True)
-        file.write("\n")
-    active.unlink()
-    return output
-
+    with phase_lock(directory):
+        if not active.is_file():
+            raise DiagnosticError(f"no active phase {label!r}; run start first")
+        state = json.loads(active.read_text(encoding="utf-8"))
+        if state.get("phase") != label:
+            raise DiagnosticError("active phase identity does not match")
+        started = datetime.fromisoformat(state["started"])
+        ended = local_now()
+        if ended <= started:
+            raise DiagnosticError("end time is not after phase start")
+        if ended - started > timedelta(minutes=15):
+            raise DiagnosticError(
+                "phase exceeds 15 minutes; abandon it and use a fresh phase label"
+            )
+        pids_after = yabai_pids()
+        captured = retrieve_log(started, ended)
+        start_local = started.replace(tzinfo=None)
+        end_local = ended.replace(tzinfo=None)
+        events = [t for t in parse_events(captured) if start_local <= t <= end_local]
+        output = {
+            **state,
+            "ended": ended.isoformat(timespec="microseconds"),
+            "elapsed_seconds": round((ended - started).total_seconds(), 3),
+            "yabai_pids_after": pids_after,
+            "pid_changed": state["yabai_pids_before"] != pids_after,
+            **summarize(events),
+        }
+        if report.exists() or raw.exists():
+            raise DiagnosticError("results already exist; refusing to overwrite")
+        with raw.open("x", encoding="utf-8") as file:
+            os.chmod(raw, 0o600)
+            file.write(captured)
+        with report.open("x", encoding="utf-8") as file:
+            os.chmod(report, 0o600)
+            json.dump(output, file, indent=2, sort_keys=True)
+            file.write("\n")
+        active.unlink()
+        return output
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
-    for name in ("start", "finish", "idle"):
+    for name in ("start", "finish", "idle", "abandon"):
         sub = commands.add_parser(name)
         sub.add_argument("phase")
         sub.add_argument("--dir", type=Path, default=DEFAULT_DIR)
         if name == "idle":
             sub.add_argument("--seconds", type=int, default=30)
+        if name == "abandon":
+            sub.add_argument("--reason", required=True)
+    state_parser = commands.add_parser("status")
+    state_parser.add_argument("--dir", type=Path, default=DEFAULT_DIR)
     analyze = commands.add_parser("analyze")
     analyze.add_argument("file", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.action == "analyze":
             result = summarize(parse_events(args.file.read_text(encoding="utf-8")))
+        elif args.action == "status":
+            result = status(args.dir)
         else:
             valid_label(args.phase)
-            if sys.platform != "darwin":
-                raise DiagnosticError("live phase capture requires macOS")
-            if args.action == "start":
-                result = begin(args.dir, args.phase)
-            elif args.action == "finish":
-                result = finish(args.dir, args.phase)
+            if args.action == "abandon":
+                result = abandon(args.dir, args.phase, args.reason)
             else:
-                if not 5 <= args.seconds <= 600:
-                    raise DiagnosticError("--seconds must be 5..600")
-                begin(args.dir, args.phase)
-                time.sleep(args.seconds)
-                result = finish(args.dir, args.phase)
+                if sys.platform != "darwin":
+                    raise DiagnosticError("live phase capture requires macOS")
+                if args.action == "start":
+                    result = begin(args.dir, args.phase)
+                elif args.action == "finish":
+                    result = finish(args.dir, args.phase)
+                else:
+                    if not 5 <= args.seconds <= 600:
+                        raise DiagnosticError("--seconds must be 5..600")
+                    begin(args.dir, args.phase)
+                    time.sleep(args.seconds)
+                    result = finish(args.dir, args.phase)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (DiagnosticError, OSError, ValueError, KeyError,
