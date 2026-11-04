@@ -166,3 +166,53 @@ def test_reject_long_phase(tmp_path, monkeypatch):
     module.begin(tmp_path, "too_long")
     with pytest.raises(module.DiagnosticError, match="exceeds 15 minutes"):
         module.finish(tmp_path, "too_long")
+
+
+def test_second_phase_is_rejected_even_with_different_label(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "yabai_pids", lambda: [])
+    module.begin(tmp_path, "bsp_create_03")
+    with pytest.raises(module.DiagnosticError, match="another phase is active"):
+        module.begin(tmp_path, "bsp_create_04")
+    assert sorted(module.active_labels(tmp_path)) == ["bsp_create_03"]
+    assert not (tmp_path / "bsp_create_04.active.json").exists()
+
+
+def test_abandon_preserves_evidence_and_allows_new_phase(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "yabai_pids", lambda: [])
+    module.begin(tmp_path, "old_phase")
+    result = module.abandon(tmp_path, "old_phase", "Overlapping experiment")
+    assert result["abandon_reason"] == "Overlapping experiment"
+    assert not (tmp_path / "old_phase.active.json").exists()
+    archived = tmp_path / "old_phase.abandoned.json"
+    assert json.loads(archived.read_text()) == result
+    with pytest.raises(module.DiagnosticError, match="was abandoned"):
+        module.begin(tmp_path, "old_phase")
+    with pytest.raises(module.DiagnosticError, match="no active phase"):
+        module.finish(tmp_path, "old_phase")
+    assert module.begin(tmp_path, "new_phase")["phase"] == "new_phase"
+
+
+@pytest.mark.parametrize("reason", ["", "  ", "bad\\nreason", "x" * 201])
+def test_abandon_requires_usable_reason(tmp_path, monkeypatch, reason):
+    monkeypatch.setattr(module, "yabai_pids", lambda: [])
+    module.begin(tmp_path, "phase")
+    with pytest.raises(module.DiagnosticError, match="reason"):
+        module.abandon(tmp_path, "phase", reason)
+    assert (tmp_path / "phase.active.json").exists()
+
+
+def test_status_displays_pending_phase_without_mutation(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "yabai_pids", lambda: [])
+    module.begin(tmp_path, "phase")
+    marker = (tmp_path / "phase.active.json").read_text()
+    assert module.status(tmp_path)["active"][0]["phase"] == "phase"
+    assert (tmp_path / "phase.active.json").read_text() == marker
+    module.abandon(tmp_path, "phase", "Interrupted")
+    assert module.status(tmp_path) == {"active": []}
+
+
+def test_status_tolerates_invalid_json(tmp_path):
+    (tmp_path / "broken.active.json").write_text("{broken")
+    assert module.status(tmp_path) == {
+        "active": [{"phase": "broken", "started": None}]
+    }
