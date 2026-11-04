@@ -953,3 +953,50 @@ the raw count of a known cross-application macOS error string.
 
 No GitHub Actions, service installation, Dock restart, SIP changes, or
 automatic BSP changes are introduced by the diagnostic tool.
+
+## Investigation disposition: paused pending a behavioral failure (2026-11-04)
+
+**Decision: stop routine investigation of the log messages.** This section
+supersedes earlier exploratory "next experiment" recommendations above;
+those remain as a historical record, not an active test plan.
+
+- **Periodic signature:** the five-minute passive run
+  `periodic-passive-02` observed exactly five 11-error bursts, near
+  `:58.85` at 60-second intervals, with no yabai PID at either endpoint.
+  The later 180-second `displaylink-off-01` run observed three more
+  11-error bursts at 16:46:58.890, 16:47:58.893 and 16:48:58.886,
+  again with no yabai PID at either endpoint. The latter is evidence
+  against DisplayLink being *necessary* **if** its relevant processes
+  were actually stopped throughout the test; the phase JSON alone
+  does not verify that condition.
+- **SketchyVim control:** an 11-error burst occurred after the
+  SketchyVim process exited; SketchyVim is not necessary for that
+  periodic signature.
+- **Activation-associated signature:** larger bursts follow app
+  activation/ordering across multiple applications, also with yabai
+  absent. They must not be conflated with the periodic signature.
+- **Attribution:** the logs do not identify the calling client,
+  invalid window ID or causal chain. The recurring Dock BTM
+  notifications and DisplayLink ScreenCaptureKit enumeration have
+  different, more frequent cadences; temporal proximity does not
+  establish causality. DisplayLink activity was observed in a later
+  all-process capture, but this does not overturn the off-arm result.
+- **Original incident:** the historical keyboard/mouse input freeze
+  has not been reproduced or linked causally to either error signature.
+  Error counts alone are not a measure of functional failure.
+
+**No yabai source changes or macOS service changes are justified by
+these observations.** The separately qualified Zen detach fix should
+be evaluated on its behavioral acceptance tests, not the presence
+of these WindowServer messages.
+
+**Reopen only if** (a) the desktop input freeze recurs, (b) a
+reproducible window-management failure is observed, or (c) a
+controlled test shows the errors reliably predict a user-visible
+failure. On recurrence, record the precise symptom and timestamp,
+frontmost application, affected Space/displays, yabai PID and build,
+whether the issue persists with yabai stopped, and a bounded
+WindowServer/client log around the incident. Prioritize evidence
+of responsiveness and client/request identity over additional
+passive error-count collection. Avoid terminating WindowServer or
+managed Apple/Jamf services as an investigative shortcut.
