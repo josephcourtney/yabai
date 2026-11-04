@@ -85,6 +85,11 @@ The offline parser also accepts the archived original log:
 Fields: error_count, burst_count, burst_size_histogram, counts_by_second,
 and precise burst start/end and duration. **Use per-phase bounded counts;
 do not compare overlapping --last 30s windows as if independent.**
+The start/finish commands and Kitty redraws can themselves cause desktop
+activity: use matched control phases and look for bursts **within** the
+bracket, not a single sharp boundary spike. macOS log-show timestamps and
+buffering impose further timing uncertainty. A zero count means no matching
+entries in the retrieved interval, not proof that no window problem occurred.
 
 ## Controlled measurement sequence
 
