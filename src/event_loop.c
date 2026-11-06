@@ -1801,6 +1801,13 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
 }
 #pragma clang diagnostic pop
 
+// Only consecutive motion samples may be collapsed. The last observed
+// position wins, but mouse-up/down and other events remain ordering barriers.
+static inline bool event_loop_can_coalesce(enum event_type current, enum event_type next)
+{
+    return (current == MOUSE_DRAGGED || current == MOUSE_MOVED) && current == next;
+}
+
 static void *event_loop_run(void *context)
 {
     struct event *head, *next;
@@ -1824,7 +1831,7 @@ static void *event_loop_run(void *context)
             if (type == MOUSE_DRAGGED || type == MOUSE_MOVED) {
                 struct event *peek;
                 while ((peek = __atomic_load_n(&next->next, __ATOMIC_RELAXED)) != NULL) {
-                    if (__atomic_load_n(&peek->type, __ATOMIC_RELAXED) != type) break;
+                    if (!event_loop_can_coalesce(type, __atomic_load_n(&peek->type, __ATOMIC_RELAXED))) break;
                     if (!__sync_bool_compare_and_swap(&event_loop->head, next, peek)) break;
                     void *old_context = __atomic_load_n(&next->context, __ATOMIC_RELAXED);
                     if (old_context) CFRelease(old_context);
