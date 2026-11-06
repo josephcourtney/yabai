@@ -1,6 +1,6 @@
 # Live BSP resize hardening: integration and qualification
 
-**Status:** Operator compiled `c43f4261b03c` (83 Python, 18 native, ARM64 signed, preflight PASS); live size reset and cross-display tug-of-war are now reported fixed. Gate C still fails for jittery live resizing and apparent gap/bottom-padding violations. The next deduplication patch requires fresh macOS qualification.  
+**Status:** Operator compiled `c43f4261b03c` (83 Python, 18 native, ARM64 signed, preflight PASS); live size reset and cross-display tug-of-war are reported fixed. The gap/bottom-padding report was withdrawn after effective per-Space configuration was checked. Operator reports severe jitter persists on `ce2344a5108f`, with transient movement of the opposite edge during top-edge resizing and application-dependent AX latency. The next AX write-plan and sampling patch requires fresh macOS qualification.  
 **Branch:** `feature/live-bsp-resize-hardening-20261106`  
 **Base:** `fix/zen-detach-reconciliation-20261104`  
 **Reference:** Christian-SC26/yabai `a26707adb304bae0b415d91e70e0285af2163c68` (2026-11-05), including v7.1.33, v7.1.34 and v7.2.1 fixes.

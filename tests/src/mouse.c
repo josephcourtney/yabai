@@ -197,6 +197,48 @@ TEST_FUNC(bsp_split_retains_gap_and_outer_edge,
     TEST_CHECK(second.y + second.h == parent.y + parent.h, true);
 });
 
+TEST_FUNC(bsp_live_frame_plan_minimizes_ax_writes,
+{
+    CGRect previous = {{10, 20}, {400, 300}};
+    struct bsp_live_frame_plan plan = bsp_plan_live_frame_write(previous, previous);
+    TEST_CHECK(plan.move, false);
+    TEST_CHECK(plan.resize, false);
+
+    plan = bsp_plan_live_frame_write(previous, (CGRect) {{10, 20}, {420, 300}});
+    TEST_CHECK(plan.move, false);
+    TEST_CHECK(plan.resize, true);
+
+    plan = bsp_plan_live_frame_write(previous, (CGRect) {{20, 30}, {400, 300}});
+    TEST_CHECK(plan.move, true);
+    TEST_CHECK(plan.resize, false);
+});
+
+TEST_FUNC(bsp_live_top_edge_resize_avoids_bottom_overshoot,
+{
+    CGRect previous = {{10, 20}, {400, 300}};
+    // Drag the top edge down: the opposite edge stays at y=320.
+    CGRect shrink = {{10, 50}, {400, 270}};
+    struct bsp_live_frame_plan plan = bsp_plan_live_frame_write(previous, shrink);
+    TEST_CHECK(plan.move, true);
+    TEST_CHECK(plan.resize, true);
+    TEST_CHECK(plan.move_first, false);
+    // Shrinking before moving does not temporarily extend below y=320.
+    TEST_CHECK(previous.origin.y + shrink.size.height <= 320, true);
+
+    // Drag the top edge up: moving first avoids an intermediate bottom overshoot.
+    CGRect grow = {{10, 0}, {400, 320}};
+    plan = bsp_plan_live_frame_write(previous, grow);
+    TEST_CHECK(plan.move_first, true);
+    TEST_CHECK(grow.origin.y + previous.size.height <= 320, true);
+});
+
+TEST_FUNC(bsp_live_ax_observation_is_rate_limited,
+{
+    TEST_CHECK(bsp_live_observation_due(1000000000ULL, 950000000ULL), false);
+    TEST_CHECK(bsp_live_observation_due(1050000000ULL, 950000000ULL), true);
+    TEST_CHECK(bsp_live_observation_due(1200000000ULL, 1050000000ULL), true);
+});
+
 TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
 {
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);

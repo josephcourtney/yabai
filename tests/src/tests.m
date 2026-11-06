@@ -35,7 +35,10 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_live_minimum_learns_only_stable_rejection) \
     TEST_ENTRY(bsp_live_minimum_requires_stationary_observed_size) \
     TEST_ENTRY(bsp_live_avoids_duplicate_ax_writes_after_stale_notification) \
-    TEST_ENTRY(bsp_split_retains_gap_and_outer_edge)
+    TEST_ENTRY(bsp_split_retains_gap_and_outer_edge) \
+    TEST_ENTRY(bsp_live_frame_plan_minimizes_ax_writes) \
+    TEST_ENTRY(bsp_live_top_edge_resize_avoids_bottom_overshoot) \
+    TEST_ENTRY(bsp_live_ax_observation_is_rate_limited)
 
 static struct {
     char *name;

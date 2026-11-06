@@ -105,6 +105,12 @@ struct window
     CGSize live_resize_last_observed;
     uint8_t live_resize_width_stall;
     uint8_t live_resize_height_stall;
+    // Sample observed AX geometry at a lower cadence than pointer updates.
+    uint64_t live_resize_last_observation_ns;
+    // Enhanced UI is an application property. Cache its value for one gesture
+    // instead of making a synchronous AX query for every frame.
+    bool live_resize_eui_known;
+    bool live_resize_eui_enabled;
     bool live_resize_has_request;
     bool is_root;
     bool is_eligible;

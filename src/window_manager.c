@@ -819,6 +819,61 @@ void window_manager_set_window_frame(struct window *window, float x, float y, fl
     });
 }
 
+// A live resize must not expose the three separate AX writes used by the
+// generic setter. Size/position changes are not atomic in Accessibility, but
+// two writes are preferable to three, and an unchanged axis needs no write.
+// For top/left-edge resizing, grow by moving first and shrink by sizing first
+// to avoid a transient expansion beyond the stationary opposite edge.
+struct bsp_live_frame_plan {
+    bool move;
+    bool resize;
+    bool move_first;
+};
+
+static struct bsp_live_frame_plan bsp_plan_live_frame_write(CGRect previous, CGRect target)
+{
+    bool move = !CGPointEqualToPoint(previous.origin, target.origin);
+    bool resize = !CGSizeEqualToSize(previous.size, target.size);
+    bool move_first = resize &&
+        (target.size.width > previous.size.width ||
+         target.size.height > previous.size.height);
+    return (struct bsp_live_frame_plan) { move, resize, move_first };
+}
+
+void window_manager_set_window_frame_live(struct window *window, CGRect previous, CGRect target)
+{
+    struct bsp_live_frame_plan plan = bsp_plan_live_frame_write(previous, target);
+    if (!plan.move && !plan.resize) return;
+
+    uint64_t start = read_os_timer();
+    if (!window->live_resize_eui_known) {
+        window->live_resize_eui_enabled = ax_enhanced_userinterface(window->application->ref);
+        window->live_resize_eui_known = true;
+    }
+    if (window->live_resize_eui_enabled) {
+        AXUIElementSetAttributeValue(window->application->ref, kAXEnhancedUserInterface, kCFBooleanFalse);
+    }
+
+    if (plan.move_first) {
+        if (plan.move) window_manager_move_window(window, target.origin.x, target.origin.y);
+        if (plan.resize) window_manager_resize_window(window, target.size.width, target.size.height);
+    } else {
+        if (plan.resize) window_manager_resize_window(window, target.size.width, target.size.height);
+        if (plan.move) window_manager_move_window(window, target.origin.x, target.origin.y);
+    }
+
+    if (window->live_resize_eui_enabled) {
+        AXUIElementSetAttributeValue(window->application->ref, kAXEnhancedUserInterface, kCFBooleanTrue);
+    }
+
+    uint64_t elapsed = read_os_timer() - start;
+    if (elapsed >= 20000000ULL) {
+        debug("live_bsp_resize: slow AX write app=%s wid=%u elapsed=%.1fms move=%d resize=%d\\n",
+              window->application->name, window->id, (double) elapsed / 1000000.0,
+              plan.move, plan.resize);
+    }
+}
+
 void window_manager_set_purify_mode(struct window_manager *wm, enum purify_mode mode)
 {
     wm->purify_mode = mode;

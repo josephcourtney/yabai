@@ -492,6 +492,15 @@ static bool bsp_live_frame_needs_write(struct window *window, struct window_capt
            target.size.width != capture.w || target.size.height != capture.h;
 }
 
+// AX readback is expensive and can lag AX writes by multiple pointer events.
+// At most one observation per 100ms per window; stable minimum detection still
+// requires four observations and therefore cannot trigger on a single stale
+// frame immediately following a request.
+static bool bsp_live_observation_due(uint64_t now, uint64_t last)
+{
+    return now - last >= 100000000ULL;
+}
+
 void view_clear_live_resize_requests(struct view *view)
 {
     if (!view || !view->root) return;
@@ -503,6 +512,8 @@ void view_clear_live_resize_requests(struct view *view)
             window->live_resize_has_request = false;
             window->live_resize_width_stall = 0;
             window->live_resize_height_stall = 0;
+            window->live_resize_last_observation_ns = 0;
+            window->live_resize_eui_known = false;
         }
     }
 }
@@ -517,10 +528,19 @@ bool window_node_flush_direct(struct window_node *node)
 
     bool minimum_changed = false;
     int window_count = ts_buf_len(window_list);
+    uint64_t now = read_os_timer();
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
-        if (!window->live_resize_has_request) continue;
+        if (!window->live_resize_has_request ||
+            !bsp_live_observation_due(now, window->live_resize_last_observation_ns)) continue;
+        window->live_resize_last_observation_ns = now;
+        uint64_t start = read_os_timer();
         CGRect observed = window_ax_frame(window);
+        uint64_t elapsed = read_os_timer() - start;
+        if (elapsed >= 20000000ULL) {
+            debug("live_bsp_resize: slow AX read app=%s wid=%u elapsed=%.1fms\\n",
+                  window->application->name, window->id, (double) elapsed / 1000000.0);
+        }
         if (observed.size.width > 0.0f && observed.size.height > 0.0f) {
             minimum_changed |= bsp_observe_live_resize_minimum(window, observed.size);
         }
@@ -532,11 +552,16 @@ bool window_node_flush_direct(struct window_node *node)
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
         if (bsp_live_frame_needs_write(window, window_list[i])) {
-            window_manager_set_window_frame(window, window_list[i].x, window_list[i].y,
-                                            window_list[i].w, window_list[i].h);
-            window->live_resize_requested = CGSizeMake(window_list[i].w, window_list[i].h);
-            window->live_resize_target_frame = (CGRect) {{window_list[i].x, window_list[i].y},
-                                                          {window_list[i].w, window_list[i].h}};
+            CGRect target = (CGRect) {{window_list[i].x, window_list[i].y},
+                                      {window_list[i].w, window_list[i].h}};
+            CGRect previous = window->live_resize_has_request
+                            ? window->live_resize_target_frame : window->frame;
+            window_manager_set_window_frame_live(window, previous, target);
+            window->live_resize_requested = target.size;
+            window->live_resize_target_frame = target;
+            if (!window->live_resize_has_request) {
+                window->live_resize_last_observation_ns = read_os_timer();
+            }
             window->live_resize_has_request = true;
             // Optimistic cache: the next AX notification or delayed observation
             // will reveal the actual frame. Do not interpret stale AX readback
