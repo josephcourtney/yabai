@@ -164,20 +164,24 @@ static void area_make_pair(enum window_node_split split, int gap, float ratio, s
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        int available = (int)parent_area->w - gap;
+        int extent = max(0, (int)parent_area->w);
+        int used_gap = min(max(0, gap), extent);
+        int available = extent - used_gap;
         int first = (int)(available * ratio + 0.5f);
         left_area->w = first;
         right_area->w = available - first;
-        right_area->x += first + gap;
+        right_area->x += first + used_gap;
     } else {
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        int available = (int)parent_area->h - gap;
+        int extent = max(0, (int)parent_area->h);
+        int used_gap = min(max(0, gap), extent);
+        int available = extent - used_gap;
         int first = (int)(available * ratio + 0.5f);
         left_area->h = first;
         right_area->h = available - first;
-        right_area->y += first + gap;
+        right_area->y += first + used_gap;
     }
 }
 

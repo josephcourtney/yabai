@@ -322,3 +322,18 @@ TEST_FUNC(bsp_preview_split_conserves_stationary_outer_edges,
         TEST_CHECK(first.x + first.w + 8 == second.x, true);
     }
 });
+
+
+TEST_FUNC(bsp_preview_tiny_parent_never_creates_negative_tile,
+{
+    struct area parent = { 10.0f, 20.0f, 4.0f, 3.0f };
+    struct area first, second;
+    area_make_pair(SPLIT_X, 8, 0.5f, &parent, &first, &second);
+    TEST_CHECK(first.h >= 0.0f, true);
+    TEST_CHECK(second.h >= 0.0f, true);
+    TEST_CHECK(second.y + second.h == parent.y + parent.h, true);
+    area_make_pair(SPLIT_Y, 8, 0.5f, &parent, &first, &second);
+    TEST_CHECK(first.w >= 0.0f, true);
+    TEST_CHECK(second.w >= 0.0f, true);
+    TEST_CHECK(second.x + second.w == parent.x + parent.w, true);
+});

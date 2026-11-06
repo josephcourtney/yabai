@@ -1410,9 +1410,14 @@ res:
     g_mouse_state.resize_applied = false;
     g_mouse_state.current_action = MOUSE_MODE_NONE;
 out:
-    if (mission_control_is_active()) {
+    if (mission_control_is_active() && g_mouse_state.preview_resize_active) {
+        // A canceled preview must never resume as a live AX resize if
+        // Mission Control closes before the physical mouse button is released.
         bsp_resize_preview_cancel();
         g_mouse_state.preview_resize_active = false;
+        g_mouse_state.current_action = MOUSE_MODE_NONE;
+        g_mouse_state.window = NULL;
+        g_mouse_state.live_resized = false;
     }
     CFRelease(context);
 }
@@ -1420,8 +1425,13 @@ out:
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
     if (mission_control_is_active()) {
-        bsp_resize_preview_cancel();
-        g_mouse_state.preview_resize_active = false;
+        if (g_mouse_state.preview_resize_active) {
+            bsp_resize_preview_cancel();
+            g_mouse_state.preview_resize_active = false;
+            g_mouse_state.current_action = MOUSE_MODE_NONE;
+            g_mouse_state.window = NULL;
+            g_mouse_state.live_resized = false;
+        }
         goto out;
     }
     if (!g_mouse_state.window) goto out;

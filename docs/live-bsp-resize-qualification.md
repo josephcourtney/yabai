@@ -165,3 +165,5 @@ Status: Source implementation only. No macOS compile, native test, or GUI
 acceptance has been observed for this patch. PR remains draft.
 
 Preview mouse-up bypasses ordinary window-drop classification entirely; it commits or cancels the shadow BSP once, then clears gesture state. This prevents optimistic AX frame changes at commit from being misread as a window move.
+
+If Mission Control interrupts a preview, abort the entire resize gesture. Do not fall back to live AX resizing before the mouse button is released. If a parent area is smaller than its configured gap, clamp the effective gap to the parent extent and never generate negative tile dimensions.
