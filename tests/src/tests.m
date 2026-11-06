@@ -26,7 +26,10 @@ typedef TEST_SIG(function);
     TEST_ENTRY(mouse_frame_changes_are_classified_by_axis)        \
     TEST_ENTRY(mouse_active_move_targets_only_the_dragged_window) \
     TEST_ENTRY(mouse_release_with_no_prior_resize_still_uses_gesture_origin) \
-    TEST_ENTRY(event_coalescing_keeps_mouse_button_boundaries)
+    TEST_ENTRY(event_coalescing_keeps_mouse_button_boundaries) \
+    TEST_ENTRY(bsp_resize_clamps_to_both_child_minimums) \
+    TEST_ENTRY(bsp_resize_accounts_for_gaps) \
+    TEST_ENTRY(bsp_resize_preserves_previous_ratio_if_infeasible)
 
 static struct {
     char *name;

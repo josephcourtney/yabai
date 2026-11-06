@@ -95,6 +95,9 @@ struct window
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
+    // Lower bounds learned from AX resize readback during live BSP gestures.
+    // Zero means the application minimum has not yet been observed.
+    CGSize live_resize_minimum;
     bool is_root;
     bool is_eligible;
     uint8_t notification;

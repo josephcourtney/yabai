@@ -1284,6 +1284,10 @@ static EVENT_HANDLER(MOUSE_UP)
 
     bool cursor_moved = mouse_gesture_moved(&g_mouse_state, point);
 
+    // Mouse-up commits the drop. Source BSP flushes must include the
+    // previously dragged window again, even though its pointer remains set.
+    g_mouse_state.current_action = MOUSE_MODE_NONE;
+
     if (cursor_moved && info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
@@ -1402,11 +1406,9 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
                 enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
                 if (err == WINDOW_OP_ERROR_SUCCESS) {
                     g_mouse_state.live_resized = true;
-                } else if (!g_mouse_state.live_resized) {
-                    // Do not leave the client outside its tile on an unsupported
-                    // axis once a split has moved; mouse-up then skips adjustment.
-                    window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
                 }
+                // A managed BSP client must never be freely resized on an
+                // unsupported axis; that would escape its assigned tile.
             }
         } else {
             // Classic mode resizes only the grabbed client until mouse-up.

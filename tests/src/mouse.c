@@ -87,6 +87,24 @@ TEST_FUNC(mouse_release_with_no_prior_resize_still_uses_gesture_origin,
     TEST_CHECK(mouse_gesture_moved(&ms, CGPointMake(325, 325)), true);
 });
 
+TEST_FUNC(bsp_resize_clamps_to_both_child_minimums,
+{
+    TEST_CHECK(fabsf(bsp_clamp_ratio(0.9f, 0.5f, 1000.0f, 0.0f, 250.0f, 400.0f) - 0.6f) < 0.0001f, true);
+    TEST_CHECK(fabsf(bsp_clamp_ratio(0.1f, 0.5f, 1000.0f, 0.0f, 250.0f, 400.0f) - 0.25f) < 0.0001f, true);
+});
+
+TEST_FUNC(bsp_resize_accounts_for_gaps,
+{
+    float ratio = bsp_clamp_ratio(0.9f, 0.5f, 1000.0f, 20.0f, 250.0f, 400.0f);
+    TEST_CHECK(fabsf(ratio - (1.0f - 400.0f / 980.0f)) < 0.0001f, true);
+});
+
+TEST_FUNC(bsp_resize_preserves_previous_ratio_if_infeasible,
+{
+    TEST_CHECK(bsp_clamp_ratio(0.8f, 0.5f, 600.0f, 20.0f, 350.0f, 350.0f) == 0.5f, true);
+    TEST_CHECK(bsp_clamp_ratio(0.8f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f) == 0.5f, true);
+});
+
 TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
 {
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);

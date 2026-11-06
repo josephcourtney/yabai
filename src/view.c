@@ -210,6 +210,66 @@ static inline bool window_node_is_leaf(struct window_node *node)
     return node->left == NULL && node->right == NULL;
 }
 
+// A split is feasible only when BOTH subtrees can fit their known minimum
+// dimensions, including gaps and nested splits. Unknown minima default to 1.
+struct bsp_minimum_size { float w, h; };
+
+static struct bsp_minimum_size window_node_minimum_size(struct view *view, struct window_node *node)
+{
+    struct bsp_minimum_size minimum = { 1.0f, 1.0f };
+    if (window_node_is_leaf(node)) {
+        for (int i = 0; i < node->window_count; ++i) {
+            struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
+            if (!window) continue;
+            minimum.w = max(minimum.w, window->live_resize_minimum.width);
+            minimum.h = max(minimum.h, window->live_resize_minimum.height);
+            if (!window_can_resize(window)) {
+                minimum.w = max(minimum.w, window->frame.size.width);
+                minimum.h = max(minimum.h, window->frame.size.height);
+            }
+        }
+        return minimum;
+    }
+
+    struct bsp_minimum_size left = window_node_minimum_size(view, node->left);
+    struct bsp_minimum_size right = window_node_minimum_size(view, node->right);
+    float gap = window_node_get_gap(view);
+    if (node->split == SPLIT_Y) {
+        minimum.w = left.w + right.w + gap;
+        minimum.h = max(left.h, right.h);
+    } else {
+        minimum.w = max(left.w, right.w);
+        minimum.h = left.h + right.h + gap;
+    }
+    return minimum;
+}
+
+// Pure constraint function, also exercised by the native mouse test suite.
+// If constraints cannot fit, preserve the previous ratio rather than
+// deliberately requesting an overlapping geometry.
+static float bsp_clamp_ratio(float proposed, float previous, float extent, float gap,
+                             float first_min, float second_min)
+{
+    float available = extent - gap;
+    if (available <= 0.0f) return previous;
+    float low = max(0.1f, first_min / available);
+    float high = min(0.9f, 1.0f - second_min / available);
+    if (low > high) return previous;
+    return clampf_range(proposed, low, high);
+}
+
+float view_clamp_split_ratio(struct view *view, struct window_node *node, float proposed)
+{
+    if (!node || !node->left || !node->right) return proposed;
+    struct bsp_minimum_size left = window_node_minimum_size(view, node->left);
+    struct bsp_minimum_size right = window_node_minimum_size(view, node->right);
+    float gap = window_node_get_gap(view);
+    if (node->split == SPLIT_Y) {
+        return bsp_clamp_ratio(proposed, node->ratio, node->area.w, gap, left.w, right.w);
+    }
+    return bsp_clamp_ratio(proposed, node->ratio, node->area.h, gap, left.h, right.h);
+}
+
 static inline bool window_node_is_left_child(struct window_node *node)
 {
     return node->parent && node->parent->left == node;
@@ -360,7 +420,9 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
     if (window_node_is_leaf(node)) {
         for (int i = 0; i < node->window_count; ++i) {
             struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
-            if (window) {
+            if (window && !mouse_is_active_move(&g_mouse_state, window)) {
+                // The source BSP still owns a modifier-dragged window until
+                // mouse-up. Other view flushes must not pull it back mid-drag.
                 struct area area = node->zoom ? node->zoom->area : node->area;
                 ts_buf_push(*window_list, ((struct window_capture) { .window = window, .x = area.x, .y = area.y, .w = area.w, .h = area.h }));
             }
@@ -378,27 +440,45 @@ void window_node_flush(struct window_node *node)
     if (window_list) window_manager_animate_window_list(window_list, ts_buf_len(window_list));
 }
 
-void window_node_flush_direct(struct window_node *node)
+bool window_node_flush_direct(struct window_node *node)
 {
     struct window_capture *window_list = NULL;
     window_node_capture_windows(node, &window_list);
-    if (!window_list) return;
+    if (!window_list) return true;
 
+    bool applied_all = true;
     int window_count = ts_buf_len(window_list);
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
-        // For interactive BSP resizing, avoid costly proxy animation and
-        // redundant Accessibility calls when a cell's frame has not changed.
+        // Only cache geometry actually accepted by Accessibility. An app can
+        // silently clamp a requested size to its own minimum.
         if (window->frame.origin.x != window_list[i].x ||
             window->frame.origin.y != window_list[i].y ||
             window->frame.size.width != window_list[i].w ||
             window->frame.size.height != window_list[i].h) {
             window_manager_set_window_frame(window, window_list[i].x, window_list[i].y,
                                             window_list[i].w, window_list[i].h);
-            window->frame = (CGRect) {{window_list[i].x, window_list[i].y},
-                                      {window_list[i].w, window_list[i].h}};
+            CGRect applied = window_ax_frame(window);
+            if (applied.size.width <= 0.0f || applied.size.height <= 0.0f) {
+                applied_all = false;
+                continue;
+            }
+            if (applied.size.width > window_list[i].w + 1.5f) {
+                window->live_resize_minimum.width = max(window->live_resize_minimum.width, applied.size.width);
+            }
+            if (applied.size.height > window_list[i].h + 1.5f) {
+                window->live_resize_minimum.height = max(window->live_resize_minimum.height, applied.size.height);
+            }
+            window->frame = applied;
+            if (AX_DIFF(applied.origin.x, window_list[i].x) ||
+                AX_DIFF(applied.origin.y, window_list[i].y) ||
+                AX_DIFF(applied.size.width, window_list[i].w) ||
+                AX_DIFF(applied.size.height, window_list[i].h)) {
+                applied_all = false;
+            }
         }
     }
+    return applied_all;
 }
 
 bool window_node_contains_window(struct window_node *node, uint32_t window_id)
@@ -880,14 +960,15 @@ void view_flush(struct view *view)
     }
 }
 
-void view_flush_direct(struct view *view)
+bool view_flush_direct(struct view *view)
 {
     if (space_is_visible(view->sid)) {
-        window_node_flush_direct(view->root);
+        bool applied = window_node_flush_direct(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
-    } else {
-        view_set_flag(view, VIEW_IS_DIRTY);
+        return applied;
     }
+    view_set_flag(view, VIEW_IS_DIRTY);
+    return true;
 }
 
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
