@@ -2611,6 +2611,12 @@ static void window_manager_validate_windows_on_space(struct window_manager *wm, 
             struct window *window = window_manager_find_window(wm, view_window_list[i]);
             if (!window) continue;
 
+            // A managed window may appear on a destination display while the
+            // modifier drag is still held. Retain its source BSP membership
+            // until MOUSE_UP commits the intended drop.
+            if (g_mouse_state.current_action == MOUSE_MODE_MOVE &&
+                window == g_mouse_state.window) continue;
+
             //
             // @cleanup
             //
@@ -2662,7 +2668,8 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
             // WindowServer may report a window on the destination display
             // before the user releases an ongoing mouse drag. Retiling it now
             // races the drag and can bounce it between displays.
-            if (window == g_mouse_state.window) continue;
+            if (g_mouse_state.current_action == MOUSE_MODE_MOVE &&
+                window == g_mouse_state.window) continue;
 
             //
             // @cleanup
