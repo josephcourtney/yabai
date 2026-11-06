@@ -1391,6 +1391,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         int dy = point.y - g_mouse_state.down_location.y;
         if (abs(dx) < 2 && abs(dy) < 2) goto out;
 
+        bool step_applied = false;
         if (is_bsp_live) {
             uint8_t direction = 0;
             if (dx != 0) {
@@ -1406,6 +1407,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
                 enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
                 if (err == WINDOW_OP_ERROR_SUCCESS) {
                     g_mouse_state.live_resized = true;
+                    step_applied = true;
                 }
                 // A managed BSP client must never be freely resized on an
                 // unsupported axis; that would escape its assigned tile.
@@ -1413,11 +1415,16 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         } else {
             // Classic mode resizes only the grabbed client until mouse-up.
             window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
+            step_applied = true;
         }
 
         g_mouse_state.last_moved_time = event_time;
-        g_mouse_state.down_location = point;
-        g_mouse_state.resize_applied = true;
+        if (step_applied) {
+            // Preserve unconsumed pointer displacement after an AX rejection
+            // so a subsequent sample can cross a size-quantization threshold.
+            g_mouse_state.down_location = point;
+            g_mouse_state.resize_applied = true;
+        }
         goto out;
     }
 

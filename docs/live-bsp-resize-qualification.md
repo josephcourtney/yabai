@@ -111,17 +111,17 @@ The original candidate `63b0a76ba22b` passed 83 Python tests, 11 native C tests,
 
 | Evidence | Result |
 | --- | --- |
-| Candidate commit and clean status | Pending |
-| macOS build and architecture | Pending |
-| `just test-local` result and test totals | Not executed |
-| `just build` and codesign | Not executed |
-| `just qualify-preflight` | Not executed |
-| Foreground daemon executable/build stamp | Not verified |
-| Mode on/off query and alias | Not verified live |
-| Live nested BSP and no-fence axis behavior | Not verified live |
-| Classic release and stationary click | Not verified live |
-| Multi-display drag/retiling/source-gap result | Not verified live |
-| Mouse lifecycle / input responsiveness | Not verified live |
-| Zen and sublayer regression | Not requalified on this branch |
+| Candidate commit and clean status | Original tested SHA: `63b0a76ba22b`; corrective SHA requires fresh build |
+| macOS build and architecture | Original candidate: optimized ARM64, passed |
+| `just test-local` result and test totals | Original candidate: 83 Python + 11 native C passed; corrective changes untested |
+| `just build` and codesign | Original candidate: passed; corrective changes untested |
+| `just qualify-preflight` | Original candidate: blocked while old daemon ran; later correct foreground daemon verified |
+| Foreground daemon executable/build stamp | Original candidate: verified PID 61919, matching `~/code/yabai/bin/yabai` |
+| Mode on/off query and alias | Both returned `on` during Gate B; operator confirms `on` for failed live resize |
+| Live nested BSP and no-fence axis behavior | **FAIL**: min-height overlap observed in live mode; fix unqualified |
+| Classic release and stationary click | Not yet fully qualified |
+| Multi-display drag/retiling/source-gap result | **FAIL**: modifier move oscillation persists; fix unqualified |
+| Mouse lifecycle / input responsiveness | Not yet fully qualified |
+| Zen and sublayer regression | Not requalified on corrective changes |
 
 **Promotion rule:** Keep the PR draft and do not merge into the active integration baseline until Gates A, B and the required parts of C pass against the final candidate SHA. If a phase fails, fix narrowly and rerun the affected acceptance stages. No GitHub Actions or automatic macOS desktop/system mutations.
