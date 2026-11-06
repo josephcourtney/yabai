@@ -53,10 +53,10 @@ TEST_FUNC(mouse_frame_changes_are_classified_by_axis,
     };
     struct mouse_window_info info = {0};
     mouse_window_info_populate(&ms, &info);
-    TEST_CHECK(info.dx, 20.0f);
-    TEST_CHECK(info.dy, 10.0f);
-    TEST_CHECK(info.dw, 50.0f);
-    TEST_CHECK(info.dh, 0.0f);
+    TEST_CHECK(info.dx == 20.0f, true);
+    TEST_CHECK(info.dy == 10.0f, true);
+    TEST_CHECK(info.dw == 50.0f, true);
+    TEST_CHECK(info.dh == 0.0f, true);
     TEST_CHECK(info.changed_position, true);
     TEST_CHECK(info.changed_size, true);
     TEST_CHECK(info.changed_h, false);
