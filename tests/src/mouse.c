@@ -164,6 +164,39 @@ TEST_FUNC(bsp_live_minimum_requires_stationary_observed_size,
     TEST_CHECK(window.live_resize_minimum.width == 0.0f, true);
 });
 
+TEST_FUNC(bsp_live_avoids_duplicate_ax_writes_after_stale_notification,
+{
+    struct window window = { .frame = {{10, 20}, {400, 300}} };
+    struct window_capture capture = { .window = &window, .x = 10, .y = 20, .w = 420, .h = 300 };
+    TEST_CHECK(bsp_live_frame_needs_write(&window, capture), true);
+    window.live_resize_target_frame = (CGRect) {{10, 20}, {420, 300}};
+    window.live_resize_has_request = true;
+    // A delayed AX notification can restore the observed (old) frame.
+    window.frame = (CGRect) {{10, 20}, {400, 300}};
+    TEST_CHECK(bsp_live_frame_needs_write(&window, capture), false);
+    capture.w = 430;
+    TEST_CHECK(bsp_live_frame_needs_write(&window, capture), true);
+    window.live_resize_has_request = false;
+    capture.w = 420;
+    TEST_CHECK(bsp_live_frame_needs_write(&window, capture), true);
+});
+
+TEST_FUNC(bsp_split_retains_gap_and_outer_edge,
+{
+    struct area parent = { .x = 20, .y = 30, .w = 1000, .h = 650 };
+    struct area first, second;
+    area_make_pair(SPLIT_Y, 12, 0.5f, &parent, &first, &second);
+    TEST_CHECK(first.x == 20.0f && first.w == 494.0f, true);
+    TEST_CHECK(second.x == 526.0f && second.w == 494.0f, true);
+    TEST_CHECK(second.x - (first.x + first.w) == 12.0f, true);
+    TEST_CHECK(second.x + second.w == parent.x + parent.w, true);
+    TEST_CHECK(first.y == parent.y && first.h == parent.h, true);
+
+    area_make_pair(SPLIT_X, 12, 0.5f, &parent, &first, &second);
+    TEST_CHECK(second.y - (first.y + first.h) == 12.0f, true);
+    TEST_CHECK(second.y + second.h == parent.y + parent.h, true);
+});
+
 TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
 {
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);

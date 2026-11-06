@@ -1259,6 +1259,11 @@ static EVENT_HANDLER(MOUSE_DOWN)
 
     if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
         g_mouse_state.live_resized = false;
+        struct view *resize_view = window_manager_find_managed_window(&g_window_manager, window);
+        if (g_mouse_state.bsp_live_resize && resize_view && resize_view->layout == VIEW_BSP) {
+            // A new gesture must not inherit the previous gesture's AX targets.
+            view_clear_live_resize_requests(resize_view);
+        }
         CGPoint frame_mid = { CGRectGetMidX(g_mouse_state.window_frame), CGRectGetMidY(g_mouse_state.window_frame) };
         if (point.x < frame_mid.x) g_mouse_state.direction |= HANDLE_LEFT;
         if (point.y < frame_mid.y) g_mouse_state.direction |= HANDLE_TOP;
@@ -1358,6 +1363,11 @@ static EVENT_HANDLER(MOUSE_UP)
         if (!g_mouse_state.live_resized) {
             mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
         }
+    }
+
+    if (g_mouse_state.live_resized) {
+        // AX events resume normal cache ownership after the gesture ends.
+        view_clear_live_resize_requests(src_view);
     }
 
 err:

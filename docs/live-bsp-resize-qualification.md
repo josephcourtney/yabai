@@ -1,6 +1,6 @@
 # Live BSP resize hardening: integration and qualification
 
-**Status:** Gate A and Gate B passed on 2026-11-06 at `e328853f7870` (83 Python, 15 native tests, ARM64 signed build, verified foreground daemon). Gate C then failed with live resize flashing between requested and previous geometry. The delayed-readback correction requires new macOS qualification.  
+**Status:** Operator compiled `c43f4261b03c` (83 Python, 18 native, ARM64 signed, preflight PASS); live size reset and cross-display tug-of-war are now reported fixed. Gate C still fails for jittery live resizing and apparent gap/bottom-padding violations. The next deduplication patch requires fresh macOS qualification.  
 **Branch:** `feature/live-bsp-resize-hardening-20261106`  
 **Base:** `fix/zen-detach-reconciliation-20261104`  
 **Reference:** Christian-SC26/yabai `a26707adb304bae0b415d91e70e0285af2163c68` (2026-11-05), including v7.1.33, v7.1.34 and v7.2.1 fixes.

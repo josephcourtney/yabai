@@ -99,6 +99,9 @@ struct window
     // live BSP gestures. Zero means the minimum is not yet established.
     CGSize live_resize_minimum;
     CGSize live_resize_requested;
+    // Last submitted AX geometry is separate from the asynchronously updated
+    // observed frame. Stale AX notifications must not trigger duplicate writes.
+    CGRect live_resize_target_frame;
     CGSize live_resize_last_observed;
     uint8_t live_resize_width_stall;
     uint8_t live_resize_height_stall;

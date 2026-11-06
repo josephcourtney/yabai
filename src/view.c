@@ -452,7 +452,7 @@ static bool bsp_observe_live_resize_minimum(struct window *window, CGSize observ
     bool changed = false;
     if (observed.width > window->live_resize_requested.width + 1.5f) {
         window->live_resize_width_stall =
-            fabsf(observed.width - window->live_resize_last_observed.width) < 1.5f
+            fabs(observed.width - window->live_resize_last_observed.width) < 1.5f
             ? min(4, window->live_resize_width_stall + 1) : 1;
         if (window->live_resize_width_stall == 4 &&
             observed.width > window->live_resize_minimum.width + 1.5f) {
@@ -465,7 +465,7 @@ static bool bsp_observe_live_resize_minimum(struct window *window, CGSize observ
 
     if (observed.height > window->live_resize_requested.height + 1.5f) {
         window->live_resize_height_stall =
-            fabsf(observed.height - window->live_resize_last_observed.height) < 1.5f
+            fabs(observed.height - window->live_resize_last_observed.height) < 1.5f
             ? min(4, window->live_resize_height_stall + 1) : 1;
         if (window->live_resize_height_stall == 4 &&
             observed.height > window->live_resize_minimum.height + 1.5f) {
@@ -478,6 +478,33 @@ static bool bsp_observe_live_resize_minimum(struct window *window, CGSize observ
 
     window->live_resize_last_observed = observed;
     return changed;
+}
+
+// Compare against the last requested geometry during live resize, not against
+// the AX-notification-updated frame. A delayed notification may describe an
+// earlier request; repeating an already submitted request causes visible jitter.
+static bool bsp_live_frame_needs_write(struct window *window, struct window_capture capture)
+{
+    CGRect target = window->live_resize_has_request
+                  ? window->live_resize_target_frame
+                  : window->frame;
+    return target.origin.x != capture.x || target.origin.y != capture.y ||
+           target.size.width != capture.w || target.size.height != capture.h;
+}
+
+void view_clear_live_resize_requests(struct view *view)
+{
+    if (!view || !view->root) return;
+    for (struct window_node *node = window_node_find_first_leaf(view->root);
+         node; node = window_node_find_next_leaf(node)) {
+        for (int i = 0; i < node->window_count; ++i) {
+            struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
+            if (!window) continue;
+            window->live_resize_has_request = false;
+            window->live_resize_width_stall = 0;
+            window->live_resize_height_stall = 0;
+        }
+    }
 }
 
 // Returns true only when a newly observed minimum requires the caller to
@@ -504,13 +531,12 @@ bool window_node_flush_direct(struct window_node *node)
 
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
-        if (window->frame.origin.x != window_list[i].x ||
-            window->frame.origin.y != window_list[i].y ||
-            window->frame.size.width != window_list[i].w ||
-            window->frame.size.height != window_list[i].h) {
+        if (bsp_live_frame_needs_write(window, window_list[i])) {
             window_manager_set_window_frame(window, window_list[i].x, window_list[i].y,
                                             window_list[i].w, window_list[i].h);
             window->live_resize_requested = CGSizeMake(window_list[i].w, window_list[i].h);
+            window->live_resize_target_frame = (CGRect) {{window_list[i].x, window_list[i].y},
+                                                          {window_list[i].w, window_list[i].h}};
             window->live_resize_has_request = true;
             // Optimistic cache: the next AX notification or delayed observation
             // will reveal the actual frame. Do not interpret stale AX readback

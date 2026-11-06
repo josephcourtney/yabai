@@ -247,6 +247,7 @@ bool view_is_invalid(struct view *view);
 bool view_is_dirty(struct view *view);
 void view_flush(struct view *view);
 bool view_flush_direct(struct view *view);
+void view_clear_live_resize_requests(struct view *view);
 float view_clamp_split_ratio(struct view *view, struct window_node *node, float proposed);
 void view_update(struct view *view);
 struct view *view_create(uint64_t sid);

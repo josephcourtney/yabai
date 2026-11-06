@@ -33,7 +33,9 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_resize_nested_subtree_minimums) \
     TEST_ENTRY(bsp_live_minimum_ignores_delayed_ax_readback) \
     TEST_ENTRY(bsp_live_minimum_learns_only_stable_rejection) \
-    TEST_ENTRY(bsp_live_minimum_requires_stationary_observed_size)
+    TEST_ENTRY(bsp_live_minimum_requires_stationary_observed_size) \
+    TEST_ENTRY(bsp_live_avoids_duplicate_ax_writes_after_stale_notification) \
+    TEST_ENTRY(bsp_split_retains_gap_and_outer_edge)
 
 static struct {
     char *name;
