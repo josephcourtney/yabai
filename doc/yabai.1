@@ -338,6 +338,19 @@ Action performed when pressing \fImouse_modifier\fP + \fIbutton2\fP.
 .RS 4
 Action performed when a bsp\-managed window is dropped in the center of some other bsp\-managed window.
 .RE
+\\fBmouse_bsp_live_resize\\fP [\\fI<BOOL_SEL>\\fP]
+.RS 4
+Resize BSP split boundaries and neighboring tiles while modifier\\-dragging a
+managed BSP window (default: on). Live resizing applies direct, non\\-animated
+geometry updates at a bounded update rate.
+.br
+When off, only the grabbed window resizes during the drag; its BSP split is
+adjusted on mouse release. This is the classic behavior, not the proposed
+preview\\-only overlay interaction.
+.br
+Alias: \\fBmouse_live_resize\\fP.
+.RE
+.sp
 .SS "Space Settings"
 .sp
 \fBlayout\fP [\fIbsp|stack|float\fP]
