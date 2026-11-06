@@ -1232,6 +1232,8 @@ static EVENT_HANDLER(MOUSE_DOWN)
     g_mouse_state.window = window;
     g_mouse_state.window_frame = g_mouse_state.window->frame;
     g_mouse_state.down_location = point;
+    g_mouse_state.origin_location = point;
+    g_mouse_state.resize_applied = false;
     g_mouse_state.direction = 0;
 
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
@@ -1280,7 +1282,9 @@ static EVENT_HANDLER(MOUSE_UP)
     struct mouse_window_info info;
     mouse_window_info_populate(&g_mouse_state, &info);
 
-    if (info.changed_position && !info.changed_size) {
+    bool cursor_moved = mouse_gesture_moved(&g_mouse_state, point);
+
+    if (cursor_moved && info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
 
@@ -1325,7 +1329,7 @@ static EVENT_HANDLER(MOUSE_UP)
         } else if (a_node) {
             mouse_drop_no_target(&g_space_manager, &g_window_manager, src_view, dst_view, g_mouse_state.window, a_node);
         }
-    } else if (info.changed_position || info.changed_size) {
+    } else if (cursor_moved && (info.changed_position || info.changed_size)) {
         if (!g_mouse_state.live_resized) {
             mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
         }
@@ -1335,6 +1339,7 @@ err:
     g_mouse_state.window = NULL;
 res:
     g_mouse_state.live_resized = false;
+    g_mouse_state.resize_applied = false;
     g_mouse_state.current_action = MOUSE_MODE_NONE;
 out:
     CFRelease(context);
@@ -1370,16 +1375,19 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             window_manager_move_window(g_mouse_state.window, new_point.x, new_point.y);
         }
     } else if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+        struct view *view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
+        bool is_bsp_live = g_mouse_state.bsp_live_resize && view && view->layout == VIEW_BSP;
+
         uint64_t event_time = read_os_timer();
-        float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float)read_os_freq());
-        if (dt < 16.0f) goto out;
+        float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float) read_os_freq());
+        float min_dt = is_bsp_live ? 33.0f : 16.0f;
+        if (dt < min_dt) goto out;
 
         int dx = point.x - g_mouse_state.down_location.x;
         int dy = point.y - g_mouse_state.down_location.y;
         if (abs(dx) < 2 && abs(dy) < 2) goto out;
 
-        struct view *view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
-        if (view && view->layout == VIEW_BSP) {
+        if (is_bsp_live) {
             uint8_t direction = 0;
             if (dx != 0) {
                 if (g_mouse_state.direction & HANDLE_LEFT) direction |= HANDLE_LEFT;
@@ -1391,19 +1399,24 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             }
 
             if (direction != 0) {
-                enum window_op_error resize_result = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
-                if (resize_result == WINDOW_OP_ERROR_SUCCESS) {
+                enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
+                if (err == WINDOW_OP_ERROR_SUCCESS) {
                     g_mouse_state.live_resized = true;
-                } else {
+                } else if (!g_mouse_state.live_resized) {
+                    // Do not leave the client outside its tile on an unsupported
+                    // axis once a split has moved; mouse-up then skips adjustment.
                     window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
                 }
             }
         } else {
+            // Classic mode resizes only the grabbed client until mouse-up.
             window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
         }
 
         g_mouse_state.last_moved_time = event_time;
         g_mouse_state.down_location = point;
+        g_mouse_state.resize_applied = true;
+        goto out;
     }
 
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
@@ -1454,6 +1467,9 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
                 /* silence compiler warning.. */
             } break;
             }
+
+            // A stack target previews the whole stack, never a split edge.
+            if (insert_dir && dst_view->layout == VIEW_STACK) insert_dir = STACK;
 
             if (b_node->insert_dir != insert_dir) {
                 b_node->insert_dir = insert_dir;
@@ -1802,7 +1818,21 @@ static void *event_loop_run(void *context)
                 if (!next) goto empty;
             } while (!__sync_bool_compare_and_swap(&event_loop->head, head, next));
 
-            switch (__atomic_load_n(&next->type, __ATOMIC_RELAXED)) {
+            // Coalesce only consecutive motion events of the same type; never
+            // cross mouse-up/down or any other event-ordering boundary.
+            enum event_type type = __atomic_load_n(&next->type, __ATOMIC_RELAXED);
+            if (type == MOUSE_DRAGGED || type == MOUSE_MOVED) {
+                struct event *peek;
+                while ((peek = __atomic_load_n(&next->next, __ATOMIC_RELAXED)) != NULL) {
+                    if (__atomic_load_n(&peek->type, __ATOMIC_RELAXED) != type) break;
+                    if (!__sync_bool_compare_and_swap(&event_loop->head, next, peek)) break;
+                    void *old_context = __atomic_load_n(&next->context, __ATOMIC_RELAXED);
+                    if (old_context) CFRelease(old_context);
+                    next = peek;
+                }
+            }
+
+            switch (type) {
 #define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(__atomic_load_n(&next->context, __ATOMIC_RELAXED), __atomic_load_n(&next->param1, __ATOMIC_RELAXED)); break;
                 EVENT_TYPE_LIST
 #undef EVENT_TYPE_ENTRY
