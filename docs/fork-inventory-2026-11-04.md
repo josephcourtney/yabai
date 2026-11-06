@@ -1,5 +1,7 @@
 # External yabai fork integration inventory — 2026-11-04
 
+> **2026-11-06 implementation update:** This is a historical 2026-11-04 audit of the *Zen integration candidate*, not the status of later staging branches. The subsequent [live BSP resize hardening branch](https://github.com/josephcourtney/yabai/tree/feature/live-bsp-resize-hardening-20261106) has **source-ported** the previously missing gesture-origin/mouse-up fix, live/classic config, direct layout flush, event coalescing and cross-display retiling guards. These changes are **not yet merged** into the Zen baseline or qualified through a signed macOS build. [Qualification record](live-bsp-resize-qualification.md). Native macOS tab grouping remains a separate pending integration.
+
 ## Comparison scope and interpretation
 
 This is a **source audit**, not proof of runtime behavior on every macOS build.
