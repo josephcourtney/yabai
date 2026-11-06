@@ -480,7 +480,14 @@ static bool bsp_preview_apply_frames(struct view *view,
                                    targets[i].w, targets[i].h);
         CGRect actual = window_ax_frame(window);
         window->frame = actual;
-        if (!bsp_preview_geometry_matches(actual, target)) applied = false;
+        if (!bsp_preview_geometry_matches(actual, target)) {
+            debug("bsp_resize_preview: AX final mismatch wid=%u target=(%.0f %.0f %.0f %.0f) actual=(%.0f %.0f %.0f %.0f)\n",
+                  window->id, target.origin.x, target.origin.y,
+                  target.size.width, target.size.height,
+                  actual.origin.x, actual.origin.y,
+                  actual.size.width, actual.size.height);
+            applied = false;
+        }
     }
     return applied;
 }
@@ -539,6 +546,7 @@ bool bsp_resize_preview_commit(struct view *view)
                                                     preview->baseline);
                     view_update(view);
                     committed = bsp_preview_apply_frames(view, snapshots, count);
+                    if (committed) view_clear_flag(view, VIEW_IS_DIRTY);
                     if (!committed) {
                         debug("bsp_resize_preview: AX rejected final position or size; rolling back\n");
                     }
@@ -551,7 +559,9 @@ bool bsp_resize_preview_commit(struct view *view)
             if (!committed) {
                 bsp_preview_restore_ratios(view->root, preview->baseline);
                 view_update(view);
-                bsp_preview_restore_snapshots(snapshots, count);
+                if (bsp_preview_restore_snapshots(snapshots, count)) {
+                    view_clear_flag(view, VIEW_IS_DIRTY);
+                }
             }
             free(snapshots);
         }
