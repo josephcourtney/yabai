@@ -426,6 +426,9 @@ static bool bsp_preview_restore_snapshots(struct bsp_preview_window_snapshot *sn
         if (restored) break;
         usleep(50000);
     }
+    // A final write may have settled during the last wait even if the
+    // preceding loop saw a mismatch. Judge success from final AX readback.
+    restored = true;
     for (int i = 0; i < count; ++i) {
         struct bsp_preview_window_snapshot *snapshot = &snapshots[i];
         CGRect actual = window_ax_frame(snapshot->window);
@@ -474,6 +477,9 @@ static bool bsp_preview_apply_frames(struct view *view,
         usleep(50000);
     }
 
+    // Verify the final observed geometry independently of the previous
+    // retry loop's tentative result.
+    applied = true;
     for (int i = 0; i < count; ++i) {
         struct window *window = snapshots[i].window;
         CGRect target = CGRectMake(targets[i].x, targets[i].y,
