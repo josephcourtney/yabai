@@ -337,3 +337,46 @@ TEST_FUNC(bsp_preview_tiny_parent_never_creates_negative_tile,
     TEST_CHECK(second.w >= 0.0f, true);
     TEST_CHECK(second.x + second.w == parent.x + parent.w, true);
 });
+
+
+TEST_FUNC(bsp_preview_maps_screen_y_down_to_quartz_y_up,
+{
+    // Use a nonzero display origin to catch accidental global/local mixing.
+    struct area root = { .x = 1200.0f, .y = 180.0f, .w = 900.0f, .h = 1600.0f };
+    struct area top = { .x = 1200.0f, .y = 180.0f, .w = 900.0f, .h = 700.0f };
+    struct area bottom = { .x = 1200.0f, .y = 900.0f, .w = 900.0f, .h = 880.0f };
+    CGRect top_rect = bsp_preview_local_rect(top, root);
+    CGRect bottom_rect = bsp_preview_local_rect(bottom, root);
+    TEST_CHECK(top_rect.origin.y == 900.0f, true);
+    TEST_CHECK(bottom_rect.origin.y == 0.0f, true);
+    TEST_CHECK(top_rect.origin.x == 0.0f, true);
+    TEST_CHECK(bottom_rect.origin.x == 0.0f, true);
+    TEST_CHECK(top_rect.size.height == 700.0f, true);
+    TEST_CHECK(bottom_rect.size.height == 880.0f, true);
+
+    // A left/right split should preserve horizontal positions while applying
+    // the same coordinate convention on landscape and portrait displays.
+    struct area left = { .x = 1200.0f, .y = 180.0f, .w = 440.0f, .h = 1600.0f };
+    struct area right = { .x = 1660.0f, .y = 180.0f, .w = 440.0f, .h = 1600.0f };
+    CGRect left_rect = bsp_preview_local_rect(left, root);
+    CGRect right_rect = bsp_preview_local_rect(right, root);
+    TEST_CHECK(left_rect.origin.x == 0.0f, true);
+    TEST_CHECK(right_rect.origin.x == 460.0f, true);
+    TEST_CHECK(left_rect.origin.y == 0.0f, true);
+    TEST_CHECK(right_rect.origin.y == 0.0f, true);
+});
+
+TEST_FUNC(bsp_preview_maps_nested_rects_without_reversing_split_order,
+{
+    struct area root = { .x = -900.0f, .y = -100.0f, .w = 900.0f, .h = 1200.0f };
+    struct area top_left = { .x = -900.0f, .y = -100.0f, .w = 440.0f, .h = 500.0f };
+    struct area bottom_right = { .x = -440.0f, .y = 420.0f, .w = 440.0f, .h = 680.0f };
+    CGRect first = bsp_preview_local_rect(top_left, root);
+    CGRect second = bsp_preview_local_rect(bottom_right, root);
+    TEST_CHECK(first.origin.x == 0.0f, true);
+    TEST_CHECK(first.origin.y == 700.0f, true);
+    TEST_CHECK(second.origin.x == 460.0f, true);
+    TEST_CHECK(second.origin.y == 0.0f, true);
+    TEST_CHECK(first.origin.y > second.origin.y, true);
+    TEST_CHECK(first.origin.x < second.origin.x, true);
+});

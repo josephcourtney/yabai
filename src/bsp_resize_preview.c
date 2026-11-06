@@ -103,13 +103,24 @@ static void bsp_preview_layout(struct view *view, struct window_node *node)
     bsp_preview_layout(view, node->right);
 }
 
+// BSP tile coordinates use the global top-left, y-down display convention.
+// SLWindowContextCreate uses a Quartz drawing context with y increasing up.
+// Convert the rectangle within the overlay before drawing; do not alter the
+// BSP tree or rotate based on CGDisplayRotation. A portrait display merely
+// makes the mismatch easier to see when tiles are stacked top-to-bottom.
+static CGRect bsp_preview_local_rect(struct area tile, struct area root)
+{
+    return CGRectMake(tile.x - root.x,
+                      root.h - (tile.y - root.y) - tile.h,
+                      tile.w, tile.h);
+}
+
 static void bsp_preview_draw_leaves(struct window_node *node, CGContextRef context,
                                     struct area root)
 {
     if (!node->left || !node->right) {
         if (!node->window_count) return;
-        CGRect rect = CGRectMake(node->area.x - root.x, node->area.y - root.y,
-                                 node->area.w, node->area.h);
+        CGRect rect = bsp_preview_local_rect(node->area, root);
         if (rect.size.width <= 3.0f || rect.size.height <= 3.0f) return;
         CGContextFillRect(context, rect);
         CGContextStrokeRect(context, CGRectInset(rect, 1.0f, 1.0f));

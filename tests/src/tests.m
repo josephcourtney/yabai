@@ -43,7 +43,9 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_preview_rejects_concurrent_topology_or_ratio_changes) \
     TEST_ENTRY(bsp_preview_commit_copies_only_changed_ratios) \
     TEST_ENTRY(bsp_preview_split_conserves_stationary_outer_edges) \
-    TEST_ENTRY(bsp_preview_tiny_parent_never_creates_negative_tile)
+    TEST_ENTRY(bsp_preview_tiny_parent_never_creates_negative_tile) \
+    TEST_ENTRY(bsp_preview_maps_screen_y_down_to_quartz_y_up) \
+    TEST_ENTRY(bsp_preview_maps_nested_rects_without_reversing_split_order)
 
 static struct {
     char *name;

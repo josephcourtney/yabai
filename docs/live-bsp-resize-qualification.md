@@ -167,3 +167,30 @@ acceptance has been observed for this patch. PR remains draft.
 Preview mouse-up bypasses ordinary window-drop classification entirely; it commits or cancels the shadow BSP once, then clears gesture state. This prevents optimistic AX frame changes at commit from being misread as a window move.
 
 If Mission Control interrupts a preview, abort the entire resize gesture. Do not fall back to live AX resizing before the mouse button is released. If a parent area is smaller than its configured gap, clamp the effective gap to the parent extent and never generate negative tile dimensions.
+
+
+## Portrait-display preview inversion (2026-11-06)
+
+Operator qualification at HEAD 6ffa995: 83 Python tests PASS, 28 native
+tests PASS, arm64 build/signature PASS, preflight PASS. Visual preview works
+on two landscape displays, but the preview rectangles appear upside down on
+a 90-degree-rotated portrait display. This is Gate C visual FAIL.
+
+Cause identified in bsp_preview_draw_leaves: global BSP tile coordinates are
+top-left/y-down; the Quartz overlay drawing context is bottom-left/y-up. The
+old code subtracted the overlay origin but did not invert the local Y axis.
+A left/right split can hide the defect; a top/bottom split exposes it.
+
+Corrective patch converts every tile to local Quartz coordinates:
+
+    local_x = tile.x - root.x
+    local_y = root.h - (tile.y - root.y) - tile.h
+
+Do not rotate based on display orientation: the correction is a coordinate
+convention conversion, not a physical monitor rotation. The same conversion
+is applied to all displays. Two native tests cover portrait top/bottom tiles,
+landscape left/right tiles, nested quadrants and nonzero/negative origins.
+
+Pending macOS runtime qualification: visually confirm top/bottom ordering on
+the portrait display, confirm both landscape displays are unchanged, and
+confirm the real windows commit to the outlines on mouse release.
