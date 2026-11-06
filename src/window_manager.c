@@ -438,7 +438,11 @@ enum window_op_error window_manager_resize_window_relative(struct window_manager
         }
 
         view_update(view);
-        view_flush(view);
+        if (animate) {
+            view_flush(view);
+        } else {
+            view_flush_direct(view);
+        }
     } else {
         if (direction == HANDLE_ABS) {
             if (animate) {
@@ -2655,6 +2659,10 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
 
         struct view *existing_view = window_manager_find_managed_window(wm, window);
         if (existing_view && existing_view->layout != VIEW_FLOAT && existing_view != view) {
+            // WindowServer may report a window on the destination display
+            // before the user releases an ongoing mouse drag. Retiling it now
+            // races the drag and can bounce it between displays.
+            if (window == g_mouse_state.window) continue;
 
             //
             // @cleanup
@@ -2670,7 +2678,16 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
             window_manager_adjust_layer(window, LAYER_NORMAL);
             window_manager_remove_managed_window(wm, window->id);
             window_manager_purify_window(wm, window);
-            view_set_flag(existing_view, VIEW_IS_DIRTY);
+
+            // The current caller flushes the destination view. The vacated
+            // source view may be visible on another display and must also
+            // be flushed or its old geometry remains as a visible gap.
+            if (space_is_visible(existing_view->sid)) {
+                window_node_flush(existing_view->root);
+                view_clear_flag(existing_view, VIEW_IS_DIRTY);
+            } else {
+                view_set_flag(existing_view, VIEW_IS_DIRTY);
+            }
         }
 
         if (!existing_view || (existing_view->layout != VIEW_FLOAT && existing_view != view)) {
