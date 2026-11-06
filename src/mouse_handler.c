@@ -105,6 +105,16 @@ void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info
     info->changed_size     = info->changed_w || info->changed_h;
 }
 
+bool mouse_gesture_moved(struct mouse_state *ms, CGPoint point)
+{
+    // down_location tracks the last accepted resize step, not the mouse-down point.
+    if (ms->resize_applied) return true;
+
+    double dx = fabs(point.x - ms->origin_location.x);
+    double dy = fabs(point.y - ms->origin_location.y);
+    return dx >= 3.0f || dy >= 3.0f;
+}
+
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point)
 {
     CGRect  f    = dst_window->frame;
@@ -269,6 +279,7 @@ void mouse_state_init(struct mouse_state *state)
     state->action1     = MOUSE_MODE_MOVE;
     state->action2     = MOUSE_MODE_RESIZE;
     state->drop_action = MOUSE_MODE_SWAP;
+    state->bsp_live_resize = true;
 }
 
 static void *mouse_handler_thread(void *context)
