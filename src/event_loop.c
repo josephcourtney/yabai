@@ -1279,6 +1279,15 @@ static EVENT_HANDLER(MOUSE_UP)
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
     if (!src_view) goto err;
 
+    // A cross-display move can complete before its AX moved notification is
+    // processed. Use the actual release-time frame to classify the drop.
+    if (g_mouse_state.current_action == MOUSE_MODE_MOVE) {
+        CGRect actual = window_ax_frame(g_mouse_state.window);
+        if (actual.size.width > 0.0f && actual.size.height > 0.0f) {
+            g_mouse_state.window->frame = actual;
+        }
+    }
+
     struct mouse_window_info info;
     mouse_window_info_populate(&g_mouse_state, &info);
 
