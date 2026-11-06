@@ -868,7 +868,7 @@ void window_manager_set_window_frame_live(struct window *window, CGRect previous
 
     uint64_t elapsed = read_os_timer() - start;
     if (elapsed >= 20000000ULL) {
-        debug("live_bsp_resize: slow AX write app=%s wid=%u elapsed=%.1fms move=%d resize=%d\\n",
+        debug("live_bsp_resize: slow AX write app=%s wid=%u elapsed=%.1fms move=%d resize=%d\n",
               window->application->name, window->id, (double) elapsed / 1000000.0,
               plan.move, plan.resize);
     }

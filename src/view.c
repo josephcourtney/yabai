@@ -538,7 +538,7 @@ bool window_node_flush_direct(struct window_node *node)
         CGRect observed = window_ax_frame(window);
         uint64_t elapsed = read_os_timer() - start;
         if (elapsed >= 20000000ULL) {
-            debug("live_bsp_resize: slow AX read app=%s wid=%u elapsed=%.1fms\\n",
+            debug("live_bsp_resize: slow AX read app=%s wid=%u elapsed=%.1fms\n",
                   window->application->name, window->id, (double) elapsed / 1000000.0);
         }
         if (observed.size.width > 0.0f && observed.size.height > 0.0f) {
