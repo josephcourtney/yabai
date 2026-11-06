@@ -247,6 +247,12 @@ Global Settings
 *mouse_drop_action* ['swap|stack']::
     Action performed when a bsp-managed window is dropped in the center of some other bsp-managed window.
 
+*mouse_bsp_live_resize* ['<BOOL_SEL>']::
+    Resize BSP split boundaries and neighboring tiles as the mouse moves (default: on). +
+    With off, resize only the grabbed window during the drag and adjust its BSP split on mouse release. +
+    Live resizing uses direct, non-animated geometry updates; this setting is distinct from the proposed preview-only interaction mode. +
+    Alias: 'mouse_live_resize'.
+
 Space Settings
 ^^^^^^^^^^^^^^
 
