@@ -23,7 +23,10 @@ typedef TEST_SIG(function);
     TEST_ENTRY(mouse_release_detects_threshold_crossing)     \
     TEST_ENTRY(mouse_release_detects_prior_resize_when_cursor_returns) \
     TEST_ENTRY(mouse_release_does_not_derive_motion_from_updated_down_location) \
-    TEST_ENTRY(mouse_frame_changes_are_classified_by_axis)
+    TEST_ENTRY(mouse_frame_changes_are_classified_by_axis)        \
+    TEST_ENTRY(mouse_active_move_targets_only_the_dragged_window) \
+    TEST_ENTRY(mouse_release_with_no_prior_resize_still_uses_gesture_origin) \
+    TEST_ENTRY(event_coalescing_keeps_mouse_button_boundaries)
 
 static struct {
     char *name;
