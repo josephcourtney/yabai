@@ -427,8 +427,6 @@ enum window_op_error window_manager_resize_window_relative(struct window_manager
         if (direction & HANDLE_RIGHT)  y_fence = window_node_fence(node, DIR_EAST);
         if (!x_fence && !y_fence)      return WINDOW_OP_ERROR_INVALID_DST_NODE;
 
-        float old_y_ratio = y_fence ? y_fence->ratio : 0.0f;
-        float old_x_ratio = x_fence ? x_fence->ratio : 0.0f;
         if (y_fence) {
             float sr = y_fence->ratio + (float) dx / (float) y_fence->area.w;
             y_fence->ratio = animate ? clampf_range(sr, 0.1f, 0.9f)
@@ -444,33 +442,18 @@ enum window_op_error window_manager_resize_window_relative(struct window_manager
         view_update(view);
         if (animate) {
             view_flush(view);
-        } else if (!view_flush_direct(view)) {
-            // A client rejected the requested geometry (typically its
-            // minimum size). Clamp again using the observed AX dimensions.
-            bool adjusted = false;
+        } else if (view_flush_direct(view)) {
+            // A stable, delayed AX observation established a new client
+            // minimum. Clamp the current split without snapping back to the
+            // gesture's previous or initial ratio.
             if (y_fence) {
-                float ratio = view_clamp_split_ratio(view, y_fence, y_fence->ratio);
-                adjusted |= fabsf(ratio - y_fence->ratio) > 0.00001f;
-                y_fence->ratio = ratio;
+                y_fence->ratio = view_clamp_split_ratio(view, y_fence, y_fence->ratio);
             }
             if (x_fence) {
-                float ratio = view_clamp_split_ratio(view, x_fence, x_fence->ratio);
-                adjusted |= fabsf(ratio - x_fence->ratio) > 0.00001f;
-                x_fence->ratio = ratio;
+                x_fence->ratio = view_clamp_split_ratio(view, x_fence, x_fence->ratio);
             }
-
-            if (adjusted) {
-                view_update(view);
-            }
-            if (!adjusted || !view_flush_direct(view)) {
-                // Never leave an invalid BSP split in place. A later drag
-                // may retry after application constraints have changed.
-                if (y_fence) y_fence->ratio = old_y_ratio;
-                if (x_fence) x_fence->ratio = old_x_ratio;
-                view_update(view);
-                view_flush_direct(view);
-                return WINDOW_OP_ERROR_INVALID_OPERATION;
-            }
+            view_update(view);
+            view_flush_direct(view);
         }
     } else {
         if (direction == HANDLE_ABS) {

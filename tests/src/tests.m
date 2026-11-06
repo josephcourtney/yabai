@@ -30,7 +30,10 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_resize_clamps_to_both_child_minimums) \
     TEST_ENTRY(bsp_resize_accounts_for_gaps) \
     TEST_ENTRY(bsp_resize_preserves_previous_ratio_if_infeasible) \
-    TEST_ENTRY(bsp_resize_nested_subtree_minimums)
+    TEST_ENTRY(bsp_resize_nested_subtree_minimums) \
+    TEST_ENTRY(bsp_live_minimum_ignores_delayed_ax_readback) \
+    TEST_ENTRY(bsp_live_minimum_learns_only_stable_rejection) \
+    TEST_ENTRY(bsp_live_minimum_requires_stationary_observed_size)
 
 static struct {
     char *name;

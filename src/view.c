@@ -440,45 +440,86 @@ void window_node_flush(struct window_node *node)
     if (window_list) window_manager_animate_window_list(window_list, ts_buf_len(window_list));
 }
 
+// Observe the *previous* AX request, never the request just issued. AX writes
+// can be applied asynchronously; one unchanged readback is not a rejection.
+// Only a repeatedly stationary actual size larger than a requested shrink is
+// evidence of a client-enforced minimum. A delayed successful resize resets
+// the candidate instead of poisoning the minimum-size cache.
+static bool bsp_observe_live_resize_minimum(struct window *window, CGSize observed)
+{
+    if (!window->live_resize_has_request) return false;
+
+    bool changed = false;
+    if (observed.width > window->live_resize_requested.width + 1.5f) {
+        window->live_resize_width_stall =
+            fabsf(observed.width - window->live_resize_last_observed.width) < 1.5f
+            ? min(4, window->live_resize_width_stall + 1) : 1;
+        if (window->live_resize_width_stall == 4 &&
+            observed.width > window->live_resize_minimum.width + 1.5f) {
+            window->live_resize_minimum.width = observed.width;
+            changed = true;
+        }
+    } else {
+        window->live_resize_width_stall = 0;
+    }
+
+    if (observed.height > window->live_resize_requested.height + 1.5f) {
+        window->live_resize_height_stall =
+            fabsf(observed.height - window->live_resize_last_observed.height) < 1.5f
+            ? min(4, window->live_resize_height_stall + 1) : 1;
+        if (window->live_resize_height_stall == 4 &&
+            observed.height > window->live_resize_minimum.height + 1.5f) {
+            window->live_resize_minimum.height = observed.height;
+            changed = true;
+        }
+    } else {
+        window->live_resize_height_stall = 0;
+    }
+
+    window->live_resize_last_observed = observed;
+    return changed;
+}
+
+// Returns true only when a newly observed minimum requires the caller to
+// recompute BSP geometry. Never roll back a split on an immediate AX readback.
 bool window_node_flush_direct(struct window_node *node)
 {
     struct window_capture *window_list = NULL;
     window_node_capture_windows(node, &window_list);
-    if (!window_list) return true;
+    if (!window_list) return false;
 
-    bool applied_all = true;
+    bool minimum_changed = false;
     int window_count = ts_buf_len(window_list);
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_list[i].window;
-        // Only cache geometry actually accepted by Accessibility. An app can
-        // silently clamp a requested size to its own minimum.
+        if (!window->live_resize_has_request) continue;
+        CGRect observed = window_ax_frame(window);
+        if (observed.size.width > 0.0f && observed.size.height > 0.0f) {
+            minimum_changed |= bsp_observe_live_resize_minimum(window, observed.size);
+        }
+    }
+    // Recompute split ratios before issuing another geometry request if an
+    // application minimum has just become known.
+    if (minimum_changed) return true;
+
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_list[i].window;
         if (window->frame.origin.x != window_list[i].x ||
             window->frame.origin.y != window_list[i].y ||
             window->frame.size.width != window_list[i].w ||
             window->frame.size.height != window_list[i].h) {
             window_manager_set_window_frame(window, window_list[i].x, window_list[i].y,
                                             window_list[i].w, window_list[i].h);
-            CGRect applied = window_ax_frame(window);
-            if (applied.size.width <= 0.0f || applied.size.height <= 0.0f) {
-                applied_all = false;
-                continue;
-            }
-            if (applied.size.width > window_list[i].w + 1.5f) {
-                window->live_resize_minimum.width = max(window->live_resize_minimum.width, applied.size.width);
-            }
-            if (applied.size.height > window_list[i].h + 1.5f) {
-                window->live_resize_minimum.height = max(window->live_resize_minimum.height, applied.size.height);
-            }
-            window->frame = applied;
-            if (AX_DIFF(applied.origin.x, window_list[i].x) ||
-                AX_DIFF(applied.origin.y, window_list[i].y) ||
-                AX_DIFF(applied.size.width, window_list[i].w) ||
-                AX_DIFF(applied.size.height, window_list[i].h)) {
-                applied_all = false;
-            }
+            window->live_resize_requested = CGSizeMake(window_list[i].w, window_list[i].h);
+            window->live_resize_has_request = true;
+            // Optimistic cache: the next AX notification or delayed observation
+            // will reveal the actual frame. Do not interpret stale AX readback
+            // as an instruction to restore the previous split.
+            window->frame = (CGRect) {{window_list[i].x, window_list[i].y},
+                                      {window_list[i].w, window_list[i].h}};
         }
     }
-    return applied_all;
+    return false;
 }
 
 bool window_node_contains_window(struct window_node *node, uint32_t window_id)
@@ -963,12 +1004,12 @@ void view_flush(struct view *view)
 bool view_flush_direct(struct view *view)
 {
     if (space_is_visible(view->sid)) {
-        bool applied = window_node_flush_direct(view->root);
+        bool minimum_changed = window_node_flush_direct(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
-        return applied;
+        return minimum_changed;
     }
     view_set_flag(view, VIEW_IS_DIRTY);
-    return true;
+    return false;
 }
 
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags)

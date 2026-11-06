@@ -121,6 +121,49 @@ TEST_FUNC(bsp_resize_nested_subtree_minimums,
     TEST_CHECK(minimum.h == 12.0f, true);
 });
 
+TEST_FUNC(bsp_live_minimum_ignores_delayed_ax_readback,
+{
+    struct window window = {
+        .live_resize_requested = { 400, 300 },
+        .live_resize_has_request = true
+    };
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    // AX eventually applies the requested size; no minimum was learned.
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(400, 300)), false);
+    TEST_CHECK(window.live_resize_minimum.width == 0.0f, true);
+    TEST_CHECK(window.live_resize_width_stall == 0, true);
+});
+
+TEST_FUNC(bsp_live_minimum_learns_only_stable_rejection,
+{
+    struct window window = {
+        .live_resize_requested = { 400, 300 },
+        .live_resize_has_request = true
+    };
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), true);
+    TEST_CHECK(window.live_resize_minimum.width == 500.0f, true);
+    TEST_CHECK(window.live_resize_minimum.height == 0.0f, true);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+});
+
+TEST_FUNC(bsp_live_minimum_requires_stationary_observed_size,
+{
+    struct window window = {
+        .live_resize_requested = { 400, 300 },
+        .live_resize_has_request = true
+    };
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(520, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(510, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(500, 300)), false);
+    TEST_CHECK(bsp_observe_live_resize_minimum(&window, CGSizeMake(490, 300)), false);
+    TEST_CHECK(window.live_resize_minimum.width == 0.0f, true);
+});
+
 TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
 {
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);

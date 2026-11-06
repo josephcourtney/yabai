@@ -4,6 +4,18 @@ extern struct display_manager g_display_manager;
 extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
+
+// Live BSP resize owns all tiles in the dragged window's view, not just the
+// grabbed tile. AX moved/resized notifications for neighbors must not launch
+// competing layout flushes while the gesture is in progress.
+static bool mouse_live_resize_controls_view(struct view *candidate)
+{
+    if (!candidate || !g_mouse_state.window ||
+        !g_mouse_state.bsp_live_resize ||
+        g_mouse_state.current_action != MOUSE_MODE_RESIZE) return false;
+    struct view *active = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
+    return active && active == candidate && active->layout == VIEW_BSP;
+}
 extern enum mission_control_mode g_mission_control_mode;
 extern int g_connection;
 extern void *g_workspace_context;
@@ -765,7 +777,7 @@ static EVENT_HANDLER(WINDOW_MOVED)
 
         if (!g_mouse_state.window || g_mouse_state.window != window) {
             struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-            if (view) {
+            if (view && !mouse_live_resize_controls_view(view)) {
                 struct window_node *node = view_find_window_node(view, window->id);
                 if (node && (AX_DIFF(node->area.x, new_origin.x) ||
                              AX_DIFF(node->area.y, new_origin.y))
@@ -907,7 +919,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
             if (!g_mouse_state.window || g_mouse_state.window != window) {
                 struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-                if (view) {
+                if (view && !mouse_live_resize_controls_view(view)) {
                     struct window_node *node = view_find_window_node(view, window->id);
                     if (node && (AX_DIFF(node->area.x, new_frame.origin.x)   ||
                                  AX_DIFF(node->area.y, new_frame.origin.y)   ||

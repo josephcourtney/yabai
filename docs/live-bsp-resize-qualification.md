@@ -1,6 +1,6 @@
 # Live BSP resize hardening: integration and qualification
 
-**Status:** Gate A and Gate B passed on 2026-11-06 at `63b0a76ba22b`; Gate C identified live minimum-size overlap and cross-display oscillation. A corrective patch requires fresh macOS qualification.  
+**Status:** Gate A and Gate B passed on 2026-11-06 at `e328853f7870` (83 Python, 15 native tests, ARM64 signed build, verified foreground daemon). Gate C then failed with live resize flashing between requested and previous geometry. The delayed-readback correction requires new macOS qualification.  
 **Branch:** `feature/live-bsp-resize-hardening-20261106`  
 **Base:** `fix/zen-detach-reconciliation-20261104`  
 **Reference:** Christian-SC26/yabai `a26707adb304bae0b415d91e70e0285af2163c68` (2026-11-05), including v7.1.33, v7.1.34 and v7.2.1 fixes.
@@ -107,7 +107,7 @@ Repeat Zen's [six-stage tab-detachment acceptance](zen-reconciliation.md) if the
 
 ## Evidence record (complete only after actual execution)
 
-The original candidate `63b0a76ba22b` passed 83 Python tests, 11 native C tests, optimized ARM64 build, signing and runtime identity/smoke checks (PID 61919; 3 displays, 6 Spaces, 13 windows). The operator then observed live resize overlap at application minimum height and persistent cross-display move oscillation. These are failures, not acceptance. The corrective source changes learn minimum dimensions from AX readback, clamp split ratios against nested subtree minima, roll back rejected geometry, and defer BSP capture of the actively moved window until mouse-up. **None of these corrections have yet been compiled or exercised on macOS.**
+The original candidate `63b0a76ba22b` passed 83 Python tests, 11 native C tests, optimized ARM64 build, signing and runtime identity/smoke checks (PID 61919; 3 displays, 6 Spaces, 13 windows). The operator then observed live resize overlap at application minimum height and persistent cross-display move oscillation. These are failures, not acceptance. The corrective source changes learn minimum dimensions from AX readback, clamp split ratios against nested subtree minima, roll back rejected geometry, and defer BSP capture of the actively moved window until mouse-up. The first correction compiled and passed 83 Python and 15 native tests, signed and ran on macOS at `e328853f7870`; Gate C exposed severe live-resize flashing. The new patch removes immediate AX-readback rollback, learns minimum dimensions only from repeated delayed stable observations, and prevents competing neighbor-window AX notification flushes during a live resize. **This new correction has not yet been compiled or exercised on macOS.**
 
 | Evidence | Result |
 | --- | --- |
