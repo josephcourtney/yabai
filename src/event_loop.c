@@ -5,12 +5,27 @@ extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
 
+// A preview is a provisional gesture. Aborting it must also disable the
+// mouse resize action so subsequent drag events cannot fall through to AX
+// resizing before the physical mouse button is released.
+static void mouse_abort_bsp_preview_gesture(struct mouse_state *state)
+{
+    if (!state->preview_resize_active) return;
+    bsp_resize_preview_cancel();
+    state->preview_resize_active = false;
+    state->current_action = MOUSE_MODE_NONE;
+    state->window = NULL;
+    state->live_resized = false;
+    state->resize_applied = false;
+}
+
 // Live BSP resize owns all tiles in the dragged window's view, not just the
 // grabbed tile. AX moved/resized notifications for neighbors must not launch
 // competing layout flushes while the gesture is in progress.
 static bool mouse_live_resize_controls_view(struct view *candidate)
 {
     if (!candidate || !g_mouse_state.window ||
+        g_mouse_state.preview_resize_active ||
         !g_mouse_state.bsp_live_resize ||
         g_mouse_state.current_action != MOUSE_MODE_RESIZE) return false;
     struct view *active = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
@@ -1103,6 +1118,7 @@ static EVENT_HANDLER(SLS_SPACE_CREATED)
 
 static EVENT_HANDLER(SLS_SPACE_DESTROYED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint64_t sid = (uint64_t)(intptr_t) context;
     struct view *view = table_find(&g_space_manager.view, &sid);
     if (view) {
@@ -1117,6 +1133,8 @@ static EVENT_HANDLER(SLS_SPACE_DESTROYED)
 
 static EVENT_HANDLER(SPACE_CHANGED)
 {
+    // Preview overlays must not outlive the Space on which they were drawn.
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     g_space_manager.last_space_id = g_space_manager.current_space_id;
     g_space_manager.current_space_id = space_manager_active_space();
 
@@ -1154,6 +1172,7 @@ static EVENT_HANDLER(SPACE_CHANGED)
 
 static EVENT_HANDLER(DISPLAY_CHANGED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t new_did = display_manager_active_display_id();
     if (g_display_manager.current_display_id == new_did) {
         debug("%s: newly activated display %d was already active (%d)! ignoring event..\n", __FUNCTION__, g_display_manager.current_display_id, new_did);
@@ -1206,6 +1225,7 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
 
 static EVENT_HANDLER(DISPLAY_ADDED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_handle_display_add(&g_space_manager, did);
@@ -1215,6 +1235,7 @@ static EVENT_HANDLER(DISPLAY_ADDED)
 
 static EVENT_HANDLER(DISPLAY_REMOVED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     display_manager_remove_label_for_display(&g_display_manager, did);
@@ -1224,6 +1245,7 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
 
 static EVENT_HANDLER(DISPLAY_MOVED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid(&g_space_manager);
@@ -1232,6 +1254,7 @@ static EVENT_HANDLER(DISPLAY_MOVED)
 
 static EVENT_HANDLER(DISPLAY_RESIZED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid_for_display(&g_space_manager, did);
@@ -1410,14 +1433,8 @@ res:
     g_mouse_state.resize_applied = false;
     g_mouse_state.current_action = MOUSE_MODE_NONE;
 out:
-    if (mission_control_is_active() && g_mouse_state.preview_resize_active) {
-        // A canceled preview must never resume as a live AX resize if
-        // Mission Control closes before the physical mouse button is released.
-        bsp_resize_preview_cancel();
-        g_mouse_state.preview_resize_active = false;
-        g_mouse_state.current_action = MOUSE_MODE_NONE;
-        g_mouse_state.window = NULL;
-        g_mouse_state.live_resized = false;
+    if (mission_control_is_active()) {
+        mouse_abort_bsp_preview_gesture(&g_mouse_state);
     }
     CFRelease(context);
 }
@@ -1425,13 +1442,7 @@ out:
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
     if (mission_control_is_active()) {
-        if (g_mouse_state.preview_resize_active) {
-            bsp_resize_preview_cancel();
-            g_mouse_state.preview_resize_active = false;
-            g_mouse_state.current_action = MOUSE_MODE_NONE;
-            g_mouse_state.window = NULL;
-            g_mouse_state.live_resized = false;
-        }
+        mouse_abort_bsp_preview_gesture(&g_mouse_state);
         goto out;
     }
     if (!g_mouse_state.window) goto out;

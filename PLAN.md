@@ -268,11 +268,11 @@ No GitHub Actions, no automatic changes to SIP/Dock/installed services, and no u
 | Native macOS tabs and follow-up fixes | **Not yet integrated** into active candidate |
 | Stack overflow protection in latest Christian source | **Not yet integrated**; required safety dependency |
 | Initial live BSP resize (PR #5) | **Source present / basic live test passed**; outstanding acceptance |
-| Later BSP mouse-up, event coalescing and cross-display fixes | **Source port staged on `feature/live-bsp-resize-hardening-20261106`**; macOS tests/merge pending |
+| Later BSP mouse-up, event coalescing and cross-display fixes | **Built and partially operator-qualified** on `7c2e68c` (83 Python, 30 native, signed ARM64, verified foreground daemon); merge and final regression gates pending |
 | Combined PR #7 and Zen baseline | **Source staged**, partial qualification; draft PR #7 remains open |
 | Pure planner / preview-only modifier-drag | **Not started** |
 | Bounded commit coordinator and cross-Space preview flow | **Not started** |
-| Separate overlay process / preview-only resizing | **Deferred until earlier gates pass** |
+| Separate overlay process / preview-only resizing | **In-process experimental BSP resize preview implemented** (opt-in, distinct from deferred separate overlay process); basic three-monitor preview accepted, interruption and final regression gates pending |
 
 Do not mark a milestone complete merely because a source patch applies or a branch builds. Record the specific functional acceptance required above.
 
@@ -285,4 +285,8 @@ D-phase interaction redesign. It clones the BSP and draws proposed tile bounds
 without AX mutations until mouse-up. The mouse_bsp_live_resize option remains.
 Qualification must establish overlay lifecycle, stationary outer-edge geometry,
 minimum-size commit behavior, topology invalidation and live/classic regressions
-before promotion. No runtime acceptance has been recorded.
+before promotion. At `7c2e68c`, the operator recorded 83/83 Python,
+30/30 native, signed ARM64 build, preflight and running-daemon PASS and
+reported working preview across two landscape and one portrait monitor.
+The subsequent lifecycle hardening patch and final regressions remain
+unqualified. PR #8 stays draft; do not infer approval to merge.

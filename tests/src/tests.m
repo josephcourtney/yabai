@@ -45,7 +45,9 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_preview_split_conserves_stationary_outer_edges) \
     TEST_ENTRY(bsp_preview_tiny_parent_never_creates_negative_tile) \
     TEST_ENTRY(bsp_preview_maps_screen_y_down_to_quartz_y_up) \
-    TEST_ENTRY(bsp_preview_maps_nested_rects_without_reversing_split_order)
+    TEST_ENTRY(bsp_preview_maps_nested_rects_without_reversing_split_order) \
+    TEST_ENTRY(bsp_preview_abort_clears_resize_gesture_state) \
+    TEST_ENTRY(bsp_preview_does_not_claim_live_ax_notification_ownership)
 
 static struct {
     char *name;

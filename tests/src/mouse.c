@@ -380,3 +380,41 @@ TEST_FUNC(bsp_preview_maps_nested_rects_without_reversing_split_order,
     TEST_CHECK(first.origin.y > second.origin.y, true);
     TEST_CHECK(first.origin.x < second.origin.x, true);
 });
+
+
+TEST_FUNC(bsp_preview_abort_clears_resize_gesture_state,
+{
+    struct window window = { .id = 501 };
+    struct mouse_state state = {
+        .preview_resize_active = true,
+        .bsp_live_resize = true,
+        .current_action = MOUSE_MODE_RESIZE,
+        .window = &window,
+        .live_resized = true,
+        .resize_applied = true
+    };
+    mouse_abort_bsp_preview_gesture(&state);
+    TEST_CHECK(state.preview_resize_active, false);
+    TEST_CHECK(state.current_action, MOUSE_MODE_NONE);
+    TEST_CHECK(state.window == NULL, true);
+    TEST_CHECK(state.live_resized, false);
+    TEST_CHECK(state.resize_applied, false);
+    // Repeated cancellation is harmless.
+    mouse_abort_bsp_preview_gesture(&state);
+    TEST_CHECK(state.current_action, MOUSE_MODE_NONE);
+});
+
+TEST_FUNC(bsp_preview_does_not_claim_live_ax_notification_ownership,
+{
+    struct mouse_state saved = g_mouse_state;
+    struct window window = { .id = 502 };
+    struct view candidate = { .layout = VIEW_BSP };
+    g_mouse_state = (struct mouse_state) {
+        .preview_resize_active = true,
+        .bsp_live_resize = true,
+        .current_action = MOUSE_MODE_RESIZE,
+        .window = &window
+    };
+    TEST_CHECK(mouse_live_resize_controls_view(&candidate), false);
+    g_mouse_state = saved;
+});

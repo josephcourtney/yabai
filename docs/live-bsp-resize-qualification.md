@@ -1,6 +1,6 @@
 # Live BSP resize hardening: integration and qualification
 
-**Status:** Operator compiled `c43f4261b03c` (83 Python, 18 native, ARM64 signed, preflight PASS); live size reset and cross-display tug-of-war are reported fixed. The gap/bottom-padding report was withdrawn after effective per-Space configuration was checked. Operator reports severe jitter persists on `ce2344a5108f`, with transient movement of the opposite edge during top-edge resizing and application-dependent AX latency. The next AX write-plan and sampling patch requires fresh macOS qualification.  
+**Status (2026-11-06):** At `7c2e68cfd19e`, 83 Python tests and 30 native tests PASS, signed ARM64 build and preflight PASS, running-daemon provenance PASS (PID 16622). Operator reports visual preview works on two landscape monitors and a 90-degree-rotated portrait monitor after the Quartz coordinate correction. The older AX live-resize mode still has reported jitter; interruption, min-size commit and broader regression acceptance remain pending. The subsequent preview lifecycle patch requires a new native build and scoped GUI verification.  
 **Branch:** `feature/live-bsp-resize-hardening-20261106`  
 **Base:** `fix/zen-detach-reconciliation-20261104`  
 **Reference:** Christian-SC26/yabai `a26707adb304bae0b415d91e70e0285af2163c68` (2026-11-05), including v7.1.33, v7.1.34 and v7.2.1 fixes.
@@ -40,7 +40,7 @@ just build
 just qualify-preflight
 ```
 
-These commands have **not** been executed as part of the source-only integration. The current execution environment does not have a macOS SDK or access to the running desktop. Do not interpret newly committed tests as passing tests until the above commands complete.
+These commands **passed on the operator's Mac** for `7c2e68cfd19e` (83 Python and 30 native tests, signed ARM64 build, preflight). The next source revision must be rebuilt and requalified separately. The assistant cannot execute the macOS GUI tests; do not infer their success from unit tests.
 
 Verify the native test runner includes tests for: live default, stationary click, threshold crossing, return-to-origin after resize, incremental versus original pointer coordinates, frame delta classification, active-move identity, and motion coalescing boundaries.
 
@@ -105,7 +105,37 @@ Do not target Space indices from earlier logs; macOS may have renumbered them. O
 
 Repeat Zen's [six-stage tab-detachment acceptance](zen-reconciliation.md) if the environment remains disposable and safe. Validate focus-follows-mouse, floating and stack windows, layout persistence read/dump, and sublayer restoration. Native macOS tab grouping is intentionally **not** part of this branch; qualify against the future tab-integrated branch again.
 
-## Evidence record (complete only after actual execution)
+## C5 — Experimental preview mode (operator acceptance pending)
+
+1. On a disposable BSP Space, record `mouse_bsp_resize_preview`, `mouse_bsp_live_resize`, `mouse_live_resize` and the Space layout. Verify preview defaults to off in a fresh daemon.
+2. Enable preview. Test top, bottom, left, right and nested splits on landscape and portrait displays. Confirm that only the overlay changes during dragging; release updates the real windows exactly once. Verify the intended stationary edges, gaps and padding.
+3. Test click-without-drag, drag then return to the original pointer position, and rapid repeated drags. Verify no unintended commit or stale overlay.
+4. Try resizing beyond an application's minimum width/height. Record whether the committed AX geometry differs from the overlay. Do not mark a mismatch as accepted.
+5. Interrupt an active preview with Mission Control, Space change, display focus change, display reconfiguration, and source-window closure. The overlay must disappear and real window geometry must remain unchanged. No later drag event may silently resume AX resizing.
+6. With preview off, verify the existing live and classic paths independently; known live-mode jitter may remain, but no new geometry or mouse-up regression is acceptable.
+7. Repeat the cross-display modifier-move scenario, Zen tab-detach registration, and floating/stack/sublayer regressions. Record outcomes separately from preview acceptance.
+
+No installed service, SIP, Dock, or personal session-restore changes are part of this qualification.
+
+## Current candidate evidence (operator logs, 2026-11-06)
+
+| Check | Evidence at `7c2e68cfd19e` |
+| --- | --- |
+| Source | Clean `feature/live-bsp-resize-hardening-20261106` |
+| Python suite | 83/83 PASS |
+| Native suite | 30/30 PASS |
+| ARM64 optimized build | PASS; Apple Development signing verified |
+| Build stamp | SHA256 `570d90d958b560ca`, tracked_dirty=false |
+| Preflight | PASS, no running yabai daemon |
+| Running foreground candidate | PASS, PID 16622, executable and stamp verified |
+| Preview, landscape monitors | Operator reports working on both |
+| Preview, rotated portrait monitor | Operator reports inversion fixed and working |
+| Interruption, minimum-size commit, Zen and cross-display regressions | Not yet demonstrated on this candidate |
+| Existing continuous AX resize | Jitter remains a known unresolved limitation |
+
+The WindowServer invalid-window counts (450/30 s at preflight, 330/30 s while running) are observations, not proof of a regression or its cause.
+
+## Historical evidence record (prior candidates)
 
 The original candidate `63b0a76ba22b` passed 83 Python tests, 11 native C tests, optimized ARM64 build, signing and runtime identity/smoke checks (PID 61919; 3 displays, 6 Spaces, 13 windows). The operator then observed live resize overlap at application minimum height and persistent cross-display move oscillation. These are failures, not acceptance. The corrective source changes learn minimum dimensions from AX readback, clamp split ratios against nested subtree minima, roll back rejected geometry, and defer BSP capture of the actively moved window until mouse-up. The first correction compiled and passed 83 Python and 15 native tests, signed and ran on macOS at `e328853f7870`; Gate C exposed severe live-resize flashing. The new patch removes immediate AX-readback rollback, learns minimum dimensions only from repeated delayed stable observations, and prevents competing neighbor-window AX notification flushes during a live resize. **This new correction has not yet been compiled or exercised on macOS.**
 
@@ -161,8 +191,10 @@ The parent BSP extent is now partitioned using complementary integer extents,
 so the stationary outside edge cannot wander by one pixel as ratios vary.
 This geometry invariant applies to all BSP modes.
 
-Status: Source implementation only. No macOS compile, native test, or GUI
-acceptance has been observed for this patch. PR remains draft.
+Status: At `7c2e68c`, signed macOS build, 83 Python tests, 30 native tests,
+preflight and running-daemon checks passed. Basic multi-monitor visual preview
+was reported working by the operator. The subsequent lifecycle patch and
+remaining Gate C cases are not yet qualified. PR remains draft.
 
 Preview mouse-up bypasses ordinary window-drop classification entirely; it commits or cancels the shadow BSP once, then clears gesture state. This prevents optimistic AX frame changes at commit from being misread as a window move.
 
@@ -191,6 +223,20 @@ convention conversion, not a physical monitor rotation. The same conversion
 is applied to all displays. Two native tests cover portrait top/bottom tiles,
 landscape left/right tiles, nested quadrants and nonzero/negative origins.
 
-Pending macOS runtime qualification: visually confirm top/bottom ordering on
-the portrait display, confirm both landscape displays are unchanged, and
-confirm the real windows commit to the outlines on mouse release.
+Operator subsequently reports the preview works on all three displays after
+`7c2e68c`. The precise mouse-up geometry, interruption and regression cases
+in C5 remain separately pending.
+
+
+## Space/display interruption hardening (post-7c2e68c)
+
+Code review identified that an overlay could remain visible after a Space
+or display change until the next pointer event. The new abort helper cancels
+the overlay and ends the resize gesture on Space/display activation, display
+add/remove/move/resize, and Space destruction. The Mission Control abort paths
+reuse the same helper. Preview mode also no longer claims live AX notification
+ownership if the separate live-resize setting is enabled. Two native tests
+cover abort-state idempotence and mode isolation.
+
+This patch is not yet compiled or operator-qualified. Repeat C5 interruption
+tests on the new exact SHA before merging.
