@@ -202,6 +202,9 @@ bool bsp_resize_preview_begin(struct view *view, uint32_t source_wid)
     preview->initial_split_type = view->split_type;
     preview->active = true;
     if (!bsp_preview_create_overlay()) goto fail;
+    // A preview commit must not inherit outstanding AX requests from an
+    // earlier live gesture. Preserve learned minimum sizes, not old targets.
+    view_clear_live_resize_requests(view);
     return true;
 fail:
     bsp_resize_preview_cancel();

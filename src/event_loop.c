@@ -1316,10 +1316,15 @@ static EVENT_HANDLER(MOUSE_UP)
     if (!src_view) goto err;
 
     if (g_mouse_state.preview_resize_active) {
-        if (!bsp_resize_preview_commit(src_view)) {
+        // Preview commits are semantic resize gestures, never window drops.
+        // Do not run generic mouse-up classification against optimistic AX
+        // frame caches: it can misinterpret a top-edge resize as a move.
+        bool changed = g_mouse_state.live_resized;
+        if (!bsp_resize_preview_commit(src_view) && changed) {
             debug("bsp_resize_preview: canceled stale or invalid preview\n");
         }
-        g_mouse_state.preview_resize_active = false;
+        view_clear_live_resize_requests(src_view);
+        goto err;
     }
 
     // A cross-display move can complete before its AX moved notification is

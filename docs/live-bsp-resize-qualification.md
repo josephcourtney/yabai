@@ -163,3 +163,5 @@ This geometry invariant applies to all BSP modes.
 
 Status: Source implementation only. No macOS compile, native test, or GUI
 acceptance has been observed for this patch. PR remains draft.
+
+Preview mouse-up bypasses ordinary window-drop classification entirely; it commits or cancels the shadow BSP once, then clears gesture state. This prevents optimistic AX frame changes at commit from being misread as a window move.
