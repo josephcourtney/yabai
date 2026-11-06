@@ -105,6 +105,22 @@ TEST_FUNC(bsp_resize_preserves_previous_ratio_if_infeasible,
     TEST_CHECK(bsp_clamp_ratio(0.8f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f) == 0.5f, true);
 });
 
+TEST_FUNC(bsp_resize_nested_subtree_minimums,
+{
+    struct window_node a = {0}, b = {0}, c = {0};
+    struct window_node nested = { .left = &a, .right = &b, .split = SPLIT_Y };
+    struct window_node root = { .left = &nested, .right = &c, .split = SPLIT_Y };
+    struct view view = { .window_gap = 10, .flags = VIEW_ENABLE_GAP };
+    struct bsp_minimum_size minimum = window_node_minimum_size(&view, &root);
+    TEST_CHECK(minimum.w == 23.0f, true);
+    TEST_CHECK(minimum.h == 1.0f, true);
+
+    nested.split = SPLIT_X;
+    minimum = window_node_minimum_size(&view, &root);
+    TEST_CHECK(minimum.w == 12.0f, true);
+    TEST_CHECK(minimum.h == 12.0f, true);
+});
+
 TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
 {
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);
