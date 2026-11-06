@@ -126,6 +126,8 @@ Take read-only before/after window, Space and layout snapshots. In human-driven 
 
 ## 4. Phase R — Live BSP resizing and drag correctness
 
+> **Implementation checkpoint (2026-11-06).** Following the explicit request to finish live BSP resizing first, the source port is staged on `feature/live-bsp-resize-hardening-20261106`, based on `fix/zen-detach-reconciliation-20261104`. The port adds live/classic mode configuration, original-gesture-position tracking, wrong-axis fallback suppression, direct no-proxy BSP frame updates, 33 ms live cadence, consecutive-motion coalescing with mouse-button barriers, and guards for both source/destination cross-display retiling before mouse-up. Native gesture and coalescing tests have been committed. **This is source integration only**: a macOS compile, `just test-local`, `just build`, verified foreground daemon, multi-display interactive acceptance and final merge remain outstanding. See [the live-BSP qualification record](docs/live-bsp-resize-qualification.md). Phase N native tabs has not started; complete both N and R independently before Phase I. This phase order is intentionally different from the originally planned N-before-R order.
+
 **Goal:** retain the live BSP functionality already present in draft PR #7, then incorporate later correctness and responsiveness improvements without simultaneously redesigning modifier-drag.
 
 ### R0. Audit the existing port
@@ -266,7 +268,7 @@ No GitHub Actions, no automatic changes to SIP/Dock/installed services, and no u
 | Native macOS tabs and follow-up fixes | **Not yet integrated** into active candidate |
 | Stack overflow protection in latest Christian source | **Not yet integrated**; required safety dependency |
 | Initial live BSP resize (PR #5) | **Source present / basic live test passed**; outstanding acceptance |
-| Later BSP mouse-up, event coalescing and cross-display fixes | **Not yet integrated/qualified** |
+| Later BSP mouse-up, event coalescing and cross-display fixes | **Source port staged on `feature/live-bsp-resize-hardening-20261106`**; macOS tests/merge pending |
 | Combined PR #7 and Zen baseline | **Source staged**, partial qualification; draft PR #7 remains open |
 | Pure planner / preview-only modifier-drag | **Not started** |
 | Bounded commit coordinator and cross-Space preview flow | **Not started** |
