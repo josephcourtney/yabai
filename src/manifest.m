@@ -88,6 +88,7 @@
 #include "display.c"
 #include "space.c"
 #include "view.c"
+#include "bsp_resize_preview.c"
 #include "window.c"
 #include "process_manager.c"
 #include "application.c"

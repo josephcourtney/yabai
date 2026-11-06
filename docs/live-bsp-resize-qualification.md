@@ -125,3 +125,41 @@ The original candidate `63b0a76ba22b` passed 83 Python tests, 11 native C tests,
 | Zen and sublayer regression | Not requalified on corrective changes |
 
 **Promotion rule:** Keep the PR draft and do not merge into the active integration baseline until Gates A, B and the required parts of C pass against the final candidate SHA. If a phase fails, fix narrowly and rerun the affected acceptance stages. No GitHub Actions or automatic macOS desktop/system mutations.
+
+
+## Experimental visual BSP resize preview (2026-11-06)
+
+The separate mouse_bsp_resize_preview on|off option (default off) previews the
+proposed BSP layout using a noninteractive translucent WindowServer overlay.
+It clones the BSP tree; the authoritative tree and real application geometry
+are not modified until mouse-up. The overlay is released on mouse-up, gesture
+invalidation, source-window destruction, or Space view teardown. Stale
+topology/ratio/Space state aborts commit rather than overwriting external
+changes. Zoomed layouts are deliberately rejected until preview semantics are
+defined. No application contents reflow during dragging.
+
+The previous AX-driven mouse_bsp_live_resize mode is retained unchanged.
+Preview on takes precedence over live mode. Preview off restores the previous
+live/classic choice; mouse_bsp_live_resize off still selects classic.
+
+Commands (run after macOS build and foreground daemon verification):
+
+    yabai -m config mouse_modifier alt
+    yabai -m config mouse_action2 resize
+    yabai -m config mouse_bsp_live_resize on
+    yabai -m config mouse_bsp_resize_preview on
+
+Check: pointer drag draws stable prospective tile bounds with preserved gaps and
+outer edges, while actual windows do not change. Mouse-up applies once. Compare
+with mouse_bsp_resize_preview off (live AX mode) and then with
+mouse_bsp_live_resize off (classic). Check app minimum-size rejection at
+commit, mouse-up without motion, display/Space switching, source window close,
+multi-display behavior, and that overlay never intercepts mouse input. Overlay
+rendering uses private WindowServer APIs and requires runtime qualification.
+
+The parent BSP extent is now partitioned using complementary integer extents,
+so the stationary outside edge cannot wander by one pixel as ratios vary.
+This geometry invariant applies to all BSP modes.
+
+Status: Source implementation only. No macOS compile, native test, or GUI
+acceptance has been observed for this patch. PR remains draft.

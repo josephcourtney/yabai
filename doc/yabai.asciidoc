@@ -253,6 +253,13 @@ Global Settings
     Live resizing uses direct, non-animated geometry updates; this setting is distinct from the proposed preview-only interaction mode. +
     Alias: 'mouse_live_resize'.
 
+*mouse_bsp_resize_preview* ['<BOOL_SEL>']::
+    Preview BSP split boundaries using a non-interactive translucent overlay (default: off). +
+    During dragging, actual application windows and the authoritative BSP remain unchanged. +
+    On mouse release, apply the proposed split once. If the BSP topology or Space changes, discard the preview. +
+    When on, preview takes precedence over 'mouse_bsp_live_resize'; turning it off restores live or classic behavior according to that separate setting. +
+    Preview does not currently support zoomed BSP windows.
+
 Space Settings
 ^^^^^^^^^^^^^^
 

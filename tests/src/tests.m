@@ -38,7 +38,11 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_split_retains_gap_and_outer_edge) \
     TEST_ENTRY(bsp_live_frame_plan_minimizes_ax_writes) \
     TEST_ENTRY(bsp_live_top_edge_resize_avoids_bottom_overshoot) \
-    TEST_ENTRY(bsp_live_ax_observation_is_rate_limited)
+    TEST_ENTRY(bsp_live_ax_observation_is_rate_limited) \
+    TEST_ENTRY(bsp_preview_shadow_does_not_mutate_live_tree) \
+    TEST_ENTRY(bsp_preview_rejects_concurrent_topology_or_ratio_changes) \
+    TEST_ENTRY(bsp_preview_commit_copies_only_changed_ratios) \
+    TEST_ENTRY(bsp_preview_split_conserves_stationary_outer_edges)
 
 static struct {
     char *name;

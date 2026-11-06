@@ -275,3 +275,14 @@ No GitHub Actions, no automatic changes to SIP/Dock/installed services, and no u
 | Separate overlay process / preview-only resizing | **Deferred until earlier gates pass** |
 
 Do not mark a milestone complete merely because a source patch applies or a branch builds. Record the specific functional acceptance required above.
+
+
+### Experimental R-preview qualification (2026-11-06)
+
+A separate opt-in visual preview implementation is staged in PR #8. It is a
+narrow trial of D5-style presentation during BSP resize, not completion of the
+D-phase interaction redesign. It clones the BSP and draws proposed tile bounds
+without AX mutations until mouse-up. The mouse_bsp_live_resize option remains.
+Qualification must establish overlay lifecycle, stationary outer-edge geometry,
+minimum-size commit behavior, topology invalidation and live/classic regressions
+before promotion. No runtime acceptance has been recorded.

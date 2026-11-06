@@ -285,6 +285,7 @@ void mouse_state_init(struct mouse_state *state)
     state->action2     = MOUSE_MODE_RESIZE;
     state->drop_action = MOUSE_MODE_SWAP;
     state->bsp_live_resize = true;
+    state->bsp_resize_preview = false;
 }
 
 static void *mouse_handler_thread(void *context)

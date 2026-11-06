@@ -6,6 +6,7 @@ TEST_FUNC(mouse_resize_defaults_to_live,
     struct mouse_state ms = {0};
     mouse_state_init(&ms);
     TEST_CHECK(ms.bsp_live_resize, true);
+    TEST_CHECK(ms.bsp_resize_preview, false);
     TEST_CHECK(ms.action1, MOUSE_MODE_MOVE);
     TEST_CHECK(ms.action2, MOUSE_MODE_RESIZE);
 });
@@ -249,4 +250,75 @@ TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
     TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_MOVED), false);
     TEST_CHECK(event_loop_can_coalesce(MOUSE_UP, MOUSE_UP), false);
     TEST_CHECK(event_loop_can_coalesce(WINDOW_MOVED, WINDOW_MOVED), false);
+});
+
+
+TEST_FUNC(bsp_preview_shadow_does_not_mutate_live_tree,
+{
+    struct window_node real = { .split = SPLIT_X, .ratio = 0.5f };
+    struct window_node left = { .window_count = 1, .window_list = {11}, .parent = &real };
+    struct window_node right = { .window_count = 1, .window_list = {12}, .parent = &real };
+    real.left = &left;
+    real.right = &right;
+    struct window_node *shadow = bsp_preview_clone_tree(&real, NULL);
+    TEST_CHECK(shadow != NULL, true);
+    if (shadow) {
+        shadow->ratio = 0.7f;
+        TEST_CHECK(real.ratio == 0.5f, true);
+        TEST_CHECK(shadow->left->parent == shadow, true);
+        bsp_preview_free_tree(shadow);
+    }
+});
+
+TEST_FUNC(bsp_preview_rejects_concurrent_topology_or_ratio_changes,
+{
+    struct window_node real = { .split = SPLIT_X, .ratio = 0.5f };
+    struct window_node left = { .window_count = 1, .window_list = {11}, .parent = &real };
+    struct window_node right = { .window_count = 1, .window_list = {12}, .parent = &real };
+    real.left = &left;
+    real.right = &right;
+    struct window_node *baseline = bsp_preview_clone_tree(&real, NULL);
+    TEST_CHECK(bsp_preview_tree_matches(&real, baseline), true);
+    right.window_list[0] = 99;
+    TEST_CHECK(bsp_preview_tree_matches(&real, baseline), false);
+    right.window_list[0] = 12;
+    real.ratio = 0.6f;
+    TEST_CHECK(bsp_preview_tree_matches(&real, baseline), false);
+    bsp_preview_free_tree(baseline);
+});
+
+TEST_FUNC(bsp_preview_commit_copies_only_changed_ratios,
+{
+    struct window_node real = { .split = SPLIT_X, .ratio = 0.5f };
+    struct window_node left = { .ratio = 0.0f, .parent = &real };
+    struct window_node right = { .ratio = 0.0f, .parent = &real };
+    real.left = &left;
+    real.right = &right;
+    struct window_node *baseline = bsp_preview_clone_tree(&real, NULL);
+    struct window_node *proposed = bsp_preview_clone_tree(&real, NULL);
+    proposed->ratio = 0.7f;
+    proposed->left->ratio = 0.5f;
+    bsp_preview_copy_changed_ratios(&real, proposed, baseline);
+    TEST_CHECK(real.ratio == 0.7f, true);
+    TEST_CHECK(left.ratio == 0.5f, true);
+    TEST_CHECK(right.ratio == 0.0f, true);
+    bsp_preview_free_tree(baseline);
+    bsp_preview_free_tree(proposed);
+});
+
+TEST_FUNC(bsp_preview_split_conserves_stationary_outer_edges,
+{
+    struct area parent = { 10.0f, 20.0f, 1001.0f, 801.0f };
+    struct area first, second;
+    for (int i = 10; i <= 90; ++i) {
+        float ratio = (float)i / 100.0f;
+        area_make_pair(SPLIT_X, 8, ratio, &parent, &first, &second);
+        TEST_CHECK(first.y == parent.y, true);
+        TEST_CHECK(second.y + second.h == parent.y + parent.h, true);
+        TEST_CHECK(first.y + first.h + 8 == second.y, true);
+        area_make_pair(SPLIT_Y, 8, ratio, &parent, &first, &second);
+        TEST_CHECK(first.x == parent.x, true);
+        TEST_CHECK(second.x + second.w == parent.x + parent.w, true);
+        TEST_CHECK(first.x + first.w + 8 == second.x, true);
+    }
 });

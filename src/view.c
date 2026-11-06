@@ -164,22 +164,20 @@ static void area_make_pair(enum window_node_split split, int gap, float ratio, s
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        float left_width  = (parent_area->w - gap) * ratio;
-        float right_width = (parent_area->w - gap) * (1 - ratio);
-
-        left_area->w   = (int)left_width;
-        right_area->w  = (int)right_width;
-        right_area->x += (int)(left_width + 0.5f) + gap;
+        int available = (int)parent_area->w - gap;
+        int first = (int)(available * ratio + 0.5f);
+        left_area->w = first;
+        right_area->w = available - first;
+        right_area->x += first + gap;
     } else {
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        float left_width  = (parent_area->h - gap) * ratio;
-        float right_width = (parent_area->h - gap) * (1 - ratio);
-
-        left_area->h   = (int)left_width;
-        right_area->h  = (int)right_width;
-        right_area->y += (int)(left_width + 0.5f) + gap;
+        int available = (int)parent_area->h - gap;
+        int first = (int)(available * ratio + 0.5f);
+        left_area->h = first;
+        right_area->h = available - first;
+        right_area->y += first + gap;
     }
 }
 
@@ -1222,6 +1220,7 @@ struct view *view_create(uint64_t sid)
 
 void view_clear(struct view *view)
 {
+    bsp_resize_preview_cancel_for_space(view->sid);
     if (view->root) {
         if (view->root->left)  window_node_destroy(view->root->left);
         if (view->root->right) window_node_destroy(view->root->right);
@@ -1238,6 +1237,7 @@ void view_clear(struct view *view)
 
 void view_destroy(struct view *view)
 {
+    bsp_resize_preview_cancel_for_space(view->sid);
     if (view->root) {
         window_node_destroy(view->root);
     }

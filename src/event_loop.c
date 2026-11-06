@@ -375,7 +375,11 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
             view_list[view_count++] = view;
         }
 
-        if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+        if (g_mouse_state.window == window) {
+            bsp_resize_preview_cancel();
+            g_mouse_state.preview_resize_active = false;
+            g_mouse_state.window = NULL;
+        }
         if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
         if (window->is_eligible) {
@@ -689,7 +693,11 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
         window_manager_remove_managed_window(&g_window_manager, window->id);
     }
 
-    if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+    if (g_mouse_state.window == window) {
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
+        g_mouse_state.window = NULL;
+    }
     if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
     if (window->is_eligible) {
@@ -1246,6 +1254,7 @@ static EVENT_HANDLER(MOUSE_DOWN)
     g_mouse_state.down_location = point;
     g_mouse_state.origin_location = point;
     g_mouse_state.resize_applied = false;
+    g_mouse_state.preview_resize_active = false;
     g_mouse_state.direction = 0;
 
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
@@ -1260,9 +1269,19 @@ static EVENT_HANDLER(MOUSE_DOWN)
     if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
         g_mouse_state.live_resized = false;
         struct view *resize_view = window_manager_find_managed_window(&g_window_manager, window);
-        if (g_mouse_state.bsp_live_resize && resize_view && resize_view->layout == VIEW_BSP) {
-            // A new gesture must not inherit the previous gesture's AX targets.
-            view_clear_live_resize_requests(resize_view);
+        if (resize_view && resize_view->layout == VIEW_BSP) {
+            if (g_mouse_state.bsp_resize_preview) {
+                g_mouse_state.preview_resize_active = bsp_resize_preview_begin(resize_view, window->id);
+                if (!g_mouse_state.preview_resize_active) {
+                    // Do not silently fall back to real-window mutation.
+                    debug("bsp_resize_preview: could not start gesture\n");
+                    g_mouse_state.current_action = MOUSE_MODE_NONE;
+                    g_mouse_state.window = NULL;
+                    goto out;
+                }
+            } else if (g_mouse_state.bsp_live_resize) {
+                view_clear_live_resize_requests(resize_view);
+            }
         }
         CGPoint frame_mid = { CGRectGetMidX(g_mouse_state.window_frame), CGRectGetMidY(g_mouse_state.window_frame) };
         if (point.x < frame_mid.x) g_mouse_state.direction |= HANDLE_LEFT;
@@ -1295,6 +1314,13 @@ static EVENT_HANDLER(MOUSE_UP)
 
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
     if (!src_view) goto err;
+
+    if (g_mouse_state.preview_resize_active) {
+        if (!bsp_resize_preview_commit(src_view)) {
+            debug("bsp_resize_preview: canceled stale or invalid preview\n");
+        }
+        g_mouse_state.preview_resize_active = false;
+    }
 
     // A cross-display move can complete before its AX moved notification is
     // processed. Use the actual release-time frame to classify the drop.
@@ -1373,22 +1399,34 @@ static EVENT_HANDLER(MOUSE_UP)
 err:
     g_mouse_state.window = NULL;
 res:
+    bsp_resize_preview_cancel();
+    g_mouse_state.preview_resize_active = false;
     g_mouse_state.live_resized = false;
     g_mouse_state.resize_applied = false;
     g_mouse_state.current_action = MOUSE_MODE_NONE;
 out:
+    if (mission_control_is_active()) {
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
+    }
     CFRelease(context);
 }
 
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
-    if (mission_control_is_active()) goto out;
-    if (!g_mouse_state.window)       goto out;
+    if (mission_control_is_active()) {
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
+        goto out;
+    }
+    if (!g_mouse_state.window) goto out;
 
     if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
         g_mouse_state.window = NULL;
         g_mouse_state.current_action = MOUSE_MODE_NONE;
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
         CFRelease(context);
         return;
     }
@@ -1411,7 +1449,9 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         }
     } else if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
         struct view *view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
-        bool is_bsp_live = g_mouse_state.bsp_live_resize && view && view->layout == VIEW_BSP;
+        bool is_bsp_preview = g_mouse_state.preview_resize_active;
+        bool is_bsp_live = !is_bsp_preview && g_mouse_state.bsp_live_resize &&
+                           view && view->layout == VIEW_BSP;
 
         uint64_t event_time = read_os_timer();
         float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float) read_os_freq());
@@ -1423,7 +1463,7 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
         if (abs(dx) < 2 && abs(dy) < 2) goto out;
 
         bool step_applied = false;
-        if (is_bsp_live) {
+        if (is_bsp_live || is_bsp_preview) {
             uint8_t direction = 0;
             if (dx != 0) {
                 if (g_mouse_state.direction & HANDLE_LEFT) direction |= HANDLE_LEFT;
@@ -1435,13 +1475,17 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             }
 
             if (direction != 0) {
-                enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
-                if (err == WINDOW_OP_ERROR_SUCCESS) {
-                    g_mouse_state.live_resized = true;
-                    step_applied = true;
+                if (is_bsp_preview) {
+                    step_applied = bsp_resize_preview_adjust(view, direction, dx, dy);
+                    if (step_applied) g_mouse_state.live_resized = true;
+                } else {
+                    enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
+                    if (err == WINDOW_OP_ERROR_SUCCESS) {
+                        g_mouse_state.live_resized = true;
+                        step_applied = true;
+                    }
                 }
-                // A managed BSP client must never be freely resized on an
-                // unsupported axis; that would escape its assigned tile.
+                // Never freely resize a managed BSP tile on an unsupported axis.
             }
         } else {
             // Classic mode resizes only the grabbed client until mouse-up.

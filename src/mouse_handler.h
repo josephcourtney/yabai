@@ -85,6 +85,8 @@ struct mouse_state
     bool live_resized;
     bool resize_applied;
     bool bsp_live_resize;
+    bool bsp_resize_preview;
+    bool preview_resize_active;
     struct window_node *feedback_node;
 };
 
