@@ -346,8 +346,8 @@ static bool bsp_preview_preflight_sizes(struct view *view)
                 probe->observed = frame.size;
                 if (probe->stable < 2) all_stable = false;
             }
-            // At least 100ms must elapse before accepting a stable readback.
-            if (attempt >= 1 && all_stable) break;
+            // At least 150ms must elapse before accepting a stable readback.
+            if (attempt >= 2 && all_stable) break;
         }
     }
 
@@ -430,12 +430,10 @@ bool bsp_resize_preview_commit(struct view *view)
                 view_flush_direct(view);
                 committed = true;
             } else {
-                debug("bsp_resize_preview: no feasible layout for AX minimum; restoring previous split
-");
+                debug("bsp_resize_preview: no feasible layout for AX minimum; restoring previous split\n");
             }
         } else {
-            debug("bsp_resize_preview: AX size preflight did not settle; restoring previous split
-");
+            debug("bsp_resize_preview: AX size preflight did not settle; restoring previous split\n");
         }
         if (!committed) {
             bsp_preview_restore_ratios(view->root, preview->baseline);
