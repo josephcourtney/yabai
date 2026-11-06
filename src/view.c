@@ -41,7 +41,7 @@ void insert_feedback_show(struct window_node *node)
         SLSReenableUpdate(g_connection);
         SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
         table_add(&g_window_manager.insert_feedback, &node->window_order[0], node);
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe() && !workspace_is_macos_goldengate()) {
             update_window_notifications();
         }
     }
@@ -107,7 +107,7 @@ void insert_feedback_destroy(struct window_node *node)
     if (node->feedback_window.id) {
         table_remove(&g_window_manager.insert_feedback, &node->window_order[0]);
 
-        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe()) {
+        if (!workspace_is_macos_sequoia() && !workspace_is_macos_tahoe() && !workspace_is_macos_goldengate()) {
             update_window_notifications();
         }
 
@@ -164,22 +164,24 @@ static void area_make_pair(enum window_node_split split, int gap, float ratio, s
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        float left_width  = (parent_area->w - gap) * ratio;
-        float right_width = (parent_area->w - gap) * (1 - ratio);
-
-        left_area->w   = (int)left_width;
-        right_area->w  = (int)right_width;
-        right_area->x += (int)(left_width + 0.5f) + gap;
+        int extent = max(0, (int)parent_area->w);
+        int used_gap = min(max(0, gap), extent);
+        int available = extent - used_gap;
+        int first = (int)(available * ratio + 0.5f);
+        left_area->w = first;
+        right_area->w = available - first;
+        right_area->x += first + used_gap;
     } else {
         *left_area  = *parent_area;
         *right_area = *parent_area;
 
-        float left_width  = (parent_area->h - gap) * ratio;
-        float right_width = (parent_area->h - gap) * (1 - ratio);
-
-        left_area->h   = (int)left_width;
-        right_area->h  = (int)right_width;
-        right_area->y += (int)(left_width + 0.5f) + gap;
+        int extent = max(0, (int)parent_area->h);
+        int used_gap = min(max(0, gap), extent);
+        int available = extent - used_gap;
+        int first = (int)(available * ratio + 0.5f);
+        left_area->h = first;
+        right_area->h = available - first;
+        right_area->y += first + used_gap;
     }
 }
 
@@ -208,6 +210,66 @@ static inline bool window_node_is_intermediate(struct window_node *node)
 static inline bool window_node_is_leaf(struct window_node *node)
 {
     return node->left == NULL && node->right == NULL;
+}
+
+// A split is feasible only when BOTH subtrees can fit their known minimum
+// dimensions, including gaps and nested splits. Unknown minima default to 1.
+struct bsp_minimum_size { float w, h; };
+
+static struct bsp_minimum_size window_node_minimum_size(struct view *view, struct window_node *node)
+{
+    struct bsp_minimum_size minimum = { 1.0f, 1.0f };
+    if (window_node_is_leaf(node)) {
+        for (int i = 0; i < node->window_count; ++i) {
+            struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
+            if (!window) continue;
+            minimum.w = max(minimum.w, window->live_resize_minimum.width);
+            minimum.h = max(minimum.h, window->live_resize_minimum.height);
+            if (!window_can_resize(window)) {
+                minimum.w = max(minimum.w, window->frame.size.width);
+                minimum.h = max(minimum.h, window->frame.size.height);
+            }
+        }
+        return minimum;
+    }
+
+    struct bsp_minimum_size left = window_node_minimum_size(view, node->left);
+    struct bsp_minimum_size right = window_node_minimum_size(view, node->right);
+    float gap = window_node_get_gap(view);
+    if (node->split == SPLIT_Y) {
+        minimum.w = left.w + right.w + gap;
+        minimum.h = max(left.h, right.h);
+    } else {
+        minimum.w = max(left.w, right.w);
+        minimum.h = left.h + right.h + gap;
+    }
+    return minimum;
+}
+
+// Pure constraint function, also exercised by the native mouse test suite.
+// If constraints cannot fit, preserve the previous ratio rather than
+// deliberately requesting an overlapping geometry.
+static float bsp_clamp_ratio(float proposed, float previous, float extent, float gap,
+                             float first_min, float second_min)
+{
+    float available = extent - gap;
+    if (available <= 0.0f) return previous;
+    float low = max(0.1f, first_min / available);
+    float high = min(0.9f, 1.0f - second_min / available);
+    if (low > high) return previous;
+    return clampf_range(proposed, low, high);
+}
+
+float view_clamp_split_ratio(struct view *view, struct window_node *node, float proposed)
+{
+    if (!node || !node->left || !node->right) return proposed;
+    struct bsp_minimum_size left = window_node_minimum_size(view, node->left);
+    struct bsp_minimum_size right = window_node_minimum_size(view, node->right);
+    float gap = window_node_get_gap(view);
+    if (node->split == SPLIT_Y) {
+        return bsp_clamp_ratio(proposed, node->ratio, node->area.w, gap, left.w, right.w);
+    }
+    return bsp_clamp_ratio(proposed, node->ratio, node->area.h, gap, left.h, right.h);
 }
 
 static inline bool window_node_is_left_child(struct window_node *node)
@@ -360,7 +422,9 @@ void window_node_capture_windows(struct window_node *node, struct window_capture
     if (window_node_is_leaf(node)) {
         for (int i = 0; i < node->window_count; ++i) {
             struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
-            if (window) {
+            if (window && !mouse_is_active_move(&g_mouse_state, window)) {
+                // The source BSP still owns a modifier-dragged window until
+                // mouse-up. Other view flushes must not pull it back mid-drag.
                 struct area area = node->zoom ? node->zoom->area : node->area;
                 ts_buf_push(*window_list, ((struct window_capture) { .window = window, .x = area.x, .y = area.y, .w = area.w, .h = area.h }));
             }
@@ -376,6 +440,139 @@ void window_node_flush(struct window_node *node)
     struct window_capture *window_list = NULL;
     window_node_capture_windows(node, &window_list);
     if (window_list) window_manager_animate_window_list(window_list, ts_buf_len(window_list));
+}
+
+// Observe the *previous* AX request, never the request just issued. AX writes
+// can be applied asynchronously; one unchanged readback is not a rejection.
+// Only a repeatedly stationary actual size larger than a requested shrink is
+// evidence of a client-enforced minimum. A delayed successful resize resets
+// the candidate instead of poisoning the minimum-size cache.
+static bool bsp_observe_live_resize_minimum(struct window *window, CGSize observed)
+{
+    if (!window->live_resize_has_request) return false;
+
+    bool changed = false;
+    if (observed.width > window->live_resize_requested.width + 1.5f) {
+        window->live_resize_width_stall =
+            fabs(observed.width - window->live_resize_last_observed.width) < 1.5f
+            ? min(4, window->live_resize_width_stall + 1) : 1;
+        if (window->live_resize_width_stall == 4 &&
+            observed.width > window->live_resize_minimum.width + 1.5f) {
+            window->live_resize_minimum.width = observed.width;
+            changed = true;
+        }
+    } else {
+        window->live_resize_width_stall = 0;
+    }
+
+    if (observed.height > window->live_resize_requested.height + 1.5f) {
+        window->live_resize_height_stall =
+            fabs(observed.height - window->live_resize_last_observed.height) < 1.5f
+            ? min(4, window->live_resize_height_stall + 1) : 1;
+        if (window->live_resize_height_stall == 4 &&
+            observed.height > window->live_resize_minimum.height + 1.5f) {
+            window->live_resize_minimum.height = observed.height;
+            changed = true;
+        }
+    } else {
+        window->live_resize_height_stall = 0;
+    }
+
+    window->live_resize_last_observed = observed;
+    return changed;
+}
+
+// Compare against the last requested geometry during live resize, not against
+// the AX-notification-updated frame. A delayed notification may describe an
+// earlier request; repeating an already submitted request causes visible jitter.
+static bool bsp_live_frame_needs_write(struct window *window, struct window_capture capture)
+{
+    CGRect target = window->live_resize_has_request
+                  ? window->live_resize_target_frame
+                  : window->frame;
+    return target.origin.x != capture.x || target.origin.y != capture.y ||
+           target.size.width != capture.w || target.size.height != capture.h;
+}
+
+// AX readback is expensive and can lag AX writes by multiple pointer events.
+// At most one observation per 100ms per window; stable minimum detection still
+// requires four observations and therefore cannot trigger on a single stale
+// frame immediately following a request.
+static bool bsp_live_observation_due(uint64_t now, uint64_t last)
+{
+    return now - last >= 100000000ULL;
+}
+
+void view_clear_live_resize_requests(struct view *view)
+{
+    if (!view || !view->root) return;
+    for (struct window_node *node = window_node_find_first_leaf(view->root);
+         node; node = window_node_find_next_leaf(node)) {
+        for (int i = 0; i < node->window_count; ++i) {
+            struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
+            if (!window) continue;
+            window->live_resize_has_request = false;
+            window->live_resize_width_stall = 0;
+            window->live_resize_height_stall = 0;
+            window->live_resize_last_observation_ns = 0;
+            window->live_resize_eui_known = false;
+        }
+    }
+}
+
+// Returns true only when a newly observed minimum requires the caller to
+// recompute BSP geometry. Never roll back a split on an immediate AX readback.
+bool window_node_flush_direct(struct window_node *node)
+{
+    struct window_capture *window_list = NULL;
+    window_node_capture_windows(node, &window_list);
+    if (!window_list) return false;
+
+    bool minimum_changed = false;
+    int window_count = ts_buf_len(window_list);
+    uint64_t now = read_os_timer();
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_list[i].window;
+        if (!window->live_resize_has_request ||
+            !bsp_live_observation_due(now, window->live_resize_last_observation_ns)) continue;
+        window->live_resize_last_observation_ns = now;
+        uint64_t start = read_os_timer();
+        CGRect observed = window_ax_frame(window);
+        uint64_t elapsed = read_os_timer() - start;
+        if (elapsed >= 20000000ULL) {
+            debug("live_bsp_resize: slow AX read app=%s wid=%u elapsed=%.1fms\n",
+                  window->application->name, window->id, (double) elapsed / 1000000.0);
+        }
+        if (observed.size.width > 0.0f && observed.size.height > 0.0f) {
+            minimum_changed |= bsp_observe_live_resize_minimum(window, observed.size);
+        }
+    }
+    // Recompute split ratios before issuing another geometry request if an
+    // application minimum has just become known.
+    if (minimum_changed) return true;
+
+    for (int i = 0; i < window_count; ++i) {
+        struct window *window = window_list[i].window;
+        if (bsp_live_frame_needs_write(window, window_list[i])) {
+            CGRect target = (CGRect) {{window_list[i].x, window_list[i].y},
+                                      {window_list[i].w, window_list[i].h}};
+            CGRect previous = window->live_resize_has_request
+                            ? window->live_resize_target_frame : window->frame;
+            window_manager_set_window_frame_live(window, previous, target);
+            window->live_resize_requested = target.size;
+            window->live_resize_target_frame = target;
+            if (!window->live_resize_has_request) {
+                window->live_resize_last_observation_ns = read_os_timer();
+            }
+            window->live_resize_has_request = true;
+            // Optimistic cache: the next AX notification or delayed observation
+            // will reveal the actual frame. Do not interpret stale AX readback
+            // as an instruction to restore the previous split.
+            window->frame = (CGRect) {{window_list[i].x, window_list[i].y},
+                                      {window_list[i].w, window_list[i].h}};
+        }
+    }
+    return false;
 }
 
 bool window_node_contains_window(struct window_node *node, uint32_t window_id)
@@ -857,6 +1054,17 @@ void view_flush(struct view *view)
     }
 }
 
+bool view_flush_direct(struct view *view)
+{
+    if (space_is_visible(view->sid)) {
+        bool minimum_changed = window_node_flush_direct(view->root);
+        view_clear_flag(view, VIEW_IS_DIRTY);
+        return minimum_changed;
+    }
+    view_set_flag(view, VIEW_IS_DIRTY);
+    return false;
+}
+
 void view_serialize(FILE *rsp, struct view *view, uint64_t flags)
 {
     TIME_FUNCTION;
@@ -1016,6 +1224,7 @@ struct view *view_create(uint64_t sid)
 
 void view_clear(struct view *view)
 {
+    bsp_resize_preview_cancel_for_space(view->sid);
     if (view->root) {
         if (view->root->left)  window_node_destroy(view->root->left);
         if (view->root->right) window_node_destroy(view->root->right);
@@ -1032,6 +1241,7 @@ void view_clear(struct view *view)
 
 void view_destroy(struct view *view)
 {
+    bsp_resize_preview_cancel_for_space(view->sid);
     if (view->root) {
         window_node_destroy(view->root);
     }

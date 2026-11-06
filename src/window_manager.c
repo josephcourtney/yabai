@@ -142,6 +142,14 @@ void window_manager_apply_rule_effects_to_window(struct space_manager *sm, struc
         window_clear_rule_flag(window, WINDOW_RULE_MFF_VALUE);
     }
 
+    if (effects->ffm == RULE_PROP_ON) {
+        window_set_rule_flag(window, WINDOW_RULE_FFM);
+        window_set_rule_flag(window, WINDOW_RULE_FFM_VALUE);
+    } else if (effects->ffm == RULE_PROP_OFF) {
+        window_set_rule_flag(window, WINDOW_RULE_FFM);
+        window_clear_rule_flag(window, WINDOW_RULE_FFM_VALUE);
+    }
+
     if (rule_effects_check_flag(effects, RULE_LAYER)) {
         window_manager_set_window_layer(window, effects->layer);
     }
@@ -229,6 +237,28 @@ void window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_
     wm->ffm_mode = mode;
 }
 
+void window_manager_set_window_sublayer_auto_enabled(struct window_manager *wm, bool enabled)
+{
+    wm->enable_window_sublayer_auto = enabled;
+    table_for (struct window *window, wm->window, {
+        if (window->layer == LAYER_AUTO) {
+            window_manager_set_window_layer(window, LAYER_AUTO);
+        }
+    })
+}
+
+void window_manager_set_manage_enabled(struct space_manager *sm, struct window_manager *wm, bool enabled)
+{
+    wm->manage = enabled;
+    // Rule-managed windows, including explicitly tiled windows, keep their
+    // intentional state across global management changes.
+    table_for (struct window *window, wm->window, {
+        if (!window_manager_is_window_eligible(window))         continue;
+        if (window_check_rule_flag(window, WINDOW_RULE_MANAGED)) continue;
+        window_manager_make_window_floating(sm, wm, window, !enabled, true);
+    })
+}
+
 void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool enabled)
 {
     wm->enable_window_opacity = enabled;
@@ -276,6 +306,18 @@ bool window_manager_should_manage_window(struct window *window)
     if (window_is_sticky(window->id))               return false;
     if (window_check_flag(window, WINDOW_MINIMIZE)) return false;
     if (window->application->is_hidden)             return false;
+
+    //
+    // NOTE(yabai-plus): never manage zero-area windows. Some apps (e.g. zoom.us)
+    // keep an invisible 0x0 AXStandardWindow alive; tiling it reserves a phantom
+    // BSP slot -- an empty gap in the layout -- while the real window is left
+    // floating and untouched. A window that legitimately starts at 0x0 is still
+    // tiled once it has a real frame, since this gate reads the live cached frame
+    // on every (re-)evaluation.
+    //
+    if (window->frame.size.width <= 0.0f || window->frame.size.height <= 0.0f) return false;
+
+    if (!g_window_manager.manage && !window_check_rule_flag(window, WINDOW_RULE_MANAGED)) return false;
 
     return (window_is_standard(window) && window_level_is_standard(window) && window_can_move(window)) || window_check_rule_flag(window, WINDOW_RULE_MANAGED);
 }
@@ -387,16 +429,32 @@ enum window_op_error window_manager_resize_window_relative(struct window_manager
 
         if (y_fence) {
             float sr = y_fence->ratio + (float) dx / (float) y_fence->area.w;
-            y_fence->ratio = clampf_range(sr, 0.1f, 0.9f);
+            y_fence->ratio = animate ? clampf_range(sr, 0.1f, 0.9f)
+                                    : view_clamp_split_ratio(view, y_fence, sr);
         }
 
         if (x_fence) {
             float sr = x_fence->ratio + (float) dy / (float) x_fence->area.h;
-            x_fence->ratio = clampf_range(sr, 0.1f, 0.9f);
+            x_fence->ratio = animate ? clampf_range(sr, 0.1f, 0.9f)
+                                    : view_clamp_split_ratio(view, x_fence, sr);
         }
 
         view_update(view);
-        view_flush(view);
+        if (animate) {
+            view_flush(view);
+        } else if (view_flush_direct(view)) {
+            // A stable, delayed AX observation established a new client
+            // minimum. Clamp the current split without snapping back to the
+            // gesture's previous or initial ratio.
+            if (y_fence) {
+                y_fence->ratio = view_clamp_split_ratio(view, y_fence, y_fence->ratio);
+            }
+            if (x_fence) {
+                x_fence->ratio = view_clamp_split_ratio(view, x_fence, x_fence->ratio);
+            }
+            view_update(view);
+            view_flush_direct(view);
+        }
     } else {
         if (direction == HANDLE_ABS) {
             if (animate) {
@@ -761,6 +819,61 @@ void window_manager_set_window_frame(struct window *window, float x, float y, fl
     });
 }
 
+// A live resize must not expose the three separate AX writes used by the
+// generic setter. Size/position changes are not atomic in Accessibility, but
+// two writes are preferable to three, and an unchanged axis needs no write.
+// For top/left-edge resizing, grow by moving first and shrink by sizing first
+// to avoid a transient expansion beyond the stationary opposite edge.
+struct bsp_live_frame_plan {
+    bool move;
+    bool resize;
+    bool move_first;
+};
+
+static struct bsp_live_frame_plan bsp_plan_live_frame_write(CGRect previous, CGRect target)
+{
+    bool move = !CGPointEqualToPoint(previous.origin, target.origin);
+    bool resize = !CGSizeEqualToSize(previous.size, target.size);
+    bool move_first = resize &&
+        (target.size.width > previous.size.width ||
+         target.size.height > previous.size.height);
+    return (struct bsp_live_frame_plan) { move, resize, move_first };
+}
+
+void window_manager_set_window_frame_live(struct window *window, CGRect previous, CGRect target)
+{
+    struct bsp_live_frame_plan plan = bsp_plan_live_frame_write(previous, target);
+    if (!plan.move && !plan.resize) return;
+
+    uint64_t start = read_os_timer();
+    if (!window->live_resize_eui_known) {
+        window->live_resize_eui_enabled = ax_enhanced_userinterface(window->application->ref);
+        window->live_resize_eui_known = true;
+    }
+    if (window->live_resize_eui_enabled) {
+        AXUIElementSetAttributeValue(window->application->ref, kAXEnhancedUserInterface, kCFBooleanFalse);
+    }
+
+    if (plan.move_first) {
+        if (plan.move) window_manager_move_window(window, target.origin.x, target.origin.y);
+        if (plan.resize) window_manager_resize_window(window, target.size.width, target.size.height);
+    } else {
+        if (plan.resize) window_manager_resize_window(window, target.size.width, target.size.height);
+        if (plan.move) window_manager_move_window(window, target.origin.x, target.origin.y);
+    }
+
+    if (window->live_resize_eui_enabled) {
+        AXUIElementSetAttributeValue(window->application->ref, kAXEnhancedUserInterface, kCFBooleanTrue);
+    }
+
+    uint64_t elapsed = read_os_timer() - start;
+    if (elapsed >= 20000000ULL) {
+        debug("live_bsp_resize: slow AX write app=%s wid=%u elapsed=%.1fms move=%d resize=%d\n",
+              window->application->name, window->id, (double) elapsed / 1000000.0,
+              plan.move, plan.resize);
+    }
+}
+
 void window_manager_set_purify_mode(struct window_manager *wm, enum purify_mode mode)
 {
     wm->purify_mode = mode;
@@ -821,6 +934,9 @@ void window_manager_adjust_layer(struct window *window, int layer)
 {
     if (window->layer != LAYER_AUTO) return;
 
+    if (!g_window_manager.enable_window_sublayer_auto && layer == LAYER_BELOW) {
+        layer = LAYER_NORMAL;
+    }
     scripting_addition_set_layer(window->id, layer);
 }
 
@@ -830,7 +946,9 @@ bool window_manager_set_window_layer(struct window *window, int layer)
     int child_layer = layer;
 
     if (layer == LAYER_AUTO) {
-        parent_layer = window_manager_find_managed_window(&g_window_manager, window) ? LAYER_BELOW : LAYER_NORMAL;
+        bool below = g_window_manager.enable_window_sublayer_auto &&
+                     window_manager_find_managed_window(&g_window_manager, window);
+        parent_layer = below ? LAYER_BELOW : LAYER_NORMAL;
         child_layer = LAYER_NORMAL;
     }
 
@@ -1502,7 +1620,8 @@ struct window *window_manager_create_and_add_window(struct space_manager *sm, st
                 goto out;
             }
 
-            if (window_is_sticky(window->id) ||
+            if (!wm->manage ||
+                window_is_sticky(window->id) ||
                 !window_can_move(window) ||
                 !window_is_standard(window) ||
                 !window_level_is_standard(window) ||
@@ -2264,8 +2383,9 @@ void window_manager_wait_for_native_fullscreen_transition(struct window *window)
         workspace_is_macos_ventura() ||
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
-        while (!space_is_user(space_manager_active_space())) {
+        (workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
+        int timeout = 30;
+        while (!space_is_user(space_manager_active_space()) && --timeout > 0) {
 
             //
             // NOTE(asmvik): Window has exited native-fullscreen mode.
@@ -2338,7 +2458,8 @@ void window_manager_toggle_window_zoom_parent(struct window_manager *wm, struct 
     if (node->zoom == node->parent) {
         node->zoom = NULL;
         if (space_is_visible(view->sid)) {
-            window_node_flush(node);
+            // Unzooming can change the geometry of the entire parent subtree.
+            window_node_flush(node->parent);
         } else {
             view_set_flag(view, VIEW_IS_DIRTY);
         }
@@ -2367,7 +2488,7 @@ void window_manager_toggle_window_zoom_fullscreen(struct window_manager *wm, str
     if (node->zoom == view->root) {
         node->zoom = NULL;
         if (space_is_visible(view->sid)) {
-            window_node_flush(node);
+            window_node_flush(view->root);
         } else {
             view_set_flag(view, VIEW_IS_DIRTY);
         }
@@ -2394,7 +2515,8 @@ void window_manager_toggle_window_windowed_fullscreen(struct window *window)
     } else {
         window_set_flag(window, WINDOW_WINDOWED);
         window->windowed_frame = window->frame;
-        CGRect bounds = display_bounds_constrained(did, true);
+        // Preserve configured external bar padding in windowed fullscreen.
+        CGRect bounds = display_bounds_constrained(did, false);
         window_manager_animate_window((struct window_capture) { .window = window, .x = bounds.origin.x, .y = bounds.origin.y, .w = bounds.size.width, .h = bounds.size.height });
     }
 }
@@ -2556,6 +2678,11 @@ static void window_manager_validate_windows_on_space(struct window_manager *wm, 
             struct window *window = window_manager_find_window(wm, view_window_list[i]);
             if (!window) continue;
 
+            // A managed window may appear on a destination display while the
+            // modifier drag is still held. Retain its source BSP membership
+            // until MOUSE_UP commits the intended drop.
+            if (mouse_is_active_move(&g_mouse_state, window)) continue;
+
             //
             // @cleanup
             //
@@ -2580,10 +2707,34 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
 {
     for (int i = 0; i < window_count; ++i) {
         struct window *window = window_manager_find_window(wm, window_list[i]);
-        if (!window || !window_manager_should_manage_window(window)) continue;
+        if (!window) continue;
+
+        // A fullscreen transition can temporarily clear move/resize flags;
+        // restore them after the window returns to a normal user space.
+        if (space_is_user(view->sid)) {
+            if (window_check_flag(window, WINDOW_FULLSCREEN) && !window_is_fullscreen(window)) {
+                window_clear_flag(window, WINDOW_FULLSCREEN);
+            }
+            if (!window_can_move(window) && window_ax_can_move(window)) {
+                window_set_flag(window, WINDOW_MOVABLE);
+            }
+            if (!window_can_resize(window) && window_ax_can_resize(window)) {
+                window_set_flag(window, WINDOW_RESIZABLE);
+            }
+        }
+
+        if (!window_manager_should_manage_window(window)) continue;
+
+        // During a Mission Control drag, the window list can contain a window
+        // whose actual space association has not yet finished changing.
+        if (window_space(window->id) != view->sid) continue;
 
         struct view *existing_view = window_manager_find_managed_window(wm, window);
         if (existing_view && existing_view->layout != VIEW_FLOAT && existing_view != view) {
+            // WindowServer may report a window on the destination display
+            // before the user releases an ongoing mouse drag. Retiling it now
+            // races the drag and can bounce it between displays.
+            if (mouse_is_active_move(&g_mouse_state, window)) continue;
 
             //
             // @cleanup
@@ -2599,7 +2750,16 @@ static void window_manager_check_for_windows_on_space(struct window_manager *wm,
             window_manager_adjust_layer(window, LAYER_NORMAL);
             window_manager_remove_managed_window(wm, window->id);
             window_manager_purify_window(wm, window);
-            view_set_flag(existing_view, VIEW_IS_DIRTY);
+
+            // The current caller flushes the destination view. The vacated
+            // source view may be visible on another display and must also
+            // be flushed or its old geometry remains as a visible gap.
+            if (space_is_visible(existing_view->sid)) {
+                window_node_flush(existing_view->root);
+                view_clear_flag(existing_view, VIEW_IS_DIRTY);
+            } else {
+                view_set_flag(existing_view, VIEW_IS_DIRTY);
+            }
         }
 
         if (!existing_view || (existing_view->layout != VIEW_FLOAT && existing_view != view)) {
@@ -2641,6 +2801,10 @@ void window_manager_validate_and_check_for_windows_on_space(struct space_manager
     // This is necessary to make sure that we do not call the AX API for each modification to the tree.
     //
 
+    // Recompute geometry for a view whose space was moved to another display.
+    // Re-homing its windows may not have dirtied the layout by itself.
+    if (space_is_visible(view->sid) && view_is_invalid(view)) view_update(view);
+
     if (space_is_visible(view->sid) && view_is_dirty(view)) {
         window_node_flush(view->root);
         view_clear_flag(view, VIEW_IS_DIRTY);
@@ -2666,6 +2830,9 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
         uint64_t sid = display_space_id(did);
         for (int j = 0; j < space_count; ++j) {
             if (space_list[j] == sid) {
+                // A space can retain its ID while moving between displays.
+                // Force recalculation of its cached display-relative frame.
+                space_manager_mark_view_invalid(sm, sid);
                 window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
             } else {
                 space_manager_mark_view_invalid(sm, space_list[j]);
@@ -2715,6 +2882,8 @@ void window_manager_init(struct window_manager *wm)
     wm->purify_mode = PURIFY_DISABLED;
     wm->window_origin_mode = WINDOW_ORIGIN_DEFAULT;
     wm->enable_mff = false;
+    wm->enable_window_sublayer_auto = true;
+    wm->manage = true;
     wm->enable_window_opacity = false;
     wm->menubar_opacity = 1.0f;
     wm->active_window_opacity = 1.0f;

@@ -95,6 +95,23 @@ struct window
     CFStringRef title;
     CGRect frame;
     CGRect windowed_frame;
+    // Lower bounds learned from repeated, delayed AX observations during
+    // live BSP gestures. Zero means the minimum is not yet established.
+    CGSize live_resize_minimum;
+    CGSize live_resize_requested;
+    // Last submitted AX geometry is separate from the asynchronously updated
+    // observed frame. Stale AX notifications must not trigger duplicate writes.
+    CGRect live_resize_target_frame;
+    CGSize live_resize_last_observed;
+    uint8_t live_resize_width_stall;
+    uint8_t live_resize_height_stall;
+    // Sample observed AX geometry at a lower cadence than pointer updates.
+    uint64_t live_resize_last_observation_ns;
+    // Enhanced UI is an application property. Cache its value for one gesture
+    // instead of making a synchronous AX query for every frame.
+    bool live_resize_eui_known;
+    bool live_resize_eui_enabled;
+    bool live_resize_has_request;
     bool is_root;
     bool is_eligible;
     uint8_t notification;
@@ -122,7 +139,9 @@ enum window_rule_flag
     WINDOW_RULE_MANAGED    = 0x01,
     WINDOW_RULE_FULLSCREEN = 0x02,
     WINDOW_RULE_MFF        = 0x04,
-    WINDOW_RULE_MFF_VALUE  = 0x08
+    WINDOW_RULE_MFF_VALUE  = 0x08,
+    WINDOW_RULE_FFM        = 0x10,
+    WINDOW_RULE_FFM_VALUE  = 0x20
 };
 
 static inline bool window_check_flag(struct window *w, enum window_flag x) { return w->flags & x; }

@@ -88,6 +88,8 @@ struct window_manager
     ProcessSerialNumber focused_window_psn;
     uint32_t last_window_id;
     bool enable_mff;
+    bool enable_window_sublayer_auto;
+    bool manage;
     enum ffm_mode ffm_mode;
     enum purify_mode purify_mode;
     enum window_origin_mode window_origin_mode;
@@ -121,6 +123,7 @@ enum window_op_error window_manager_adjust_window_ratio(struct window_manager *w
 void window_manager_animate_window(struct window_capture capture);
 void window_manager_animate_window_list(struct window_capture *window_list, int window_count);
 void window_manager_set_window_frame(struct window *window, float x, float y, float width, float height);
+void window_manager_set_window_frame_live(struct window *window, CGRect previous, CGRect target);
 int window_manager_find_rank_of_window_in_list(uint32_t wid, uint32_t *window_list, int window_count);
 struct window *window_manager_find_window_on_space_by_rank_filtering_window(struct window_manager *wm, uint64_t sid, int rank, uint32_t filter_wid);
 struct window *window_manager_find_window_at_point_filtering_window(struct window_manager *wm, CGPoint point, uint32_t filter_wid);
@@ -177,6 +180,8 @@ void window_manager_set_window_opacity_enabled(struct window_manager *wm, bool e
 bool window_manager_set_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_window_opacity(struct window_manager *wm, struct window *window, float opacity);
 void window_manager_set_focus_follows_mouse(struct window_manager *wm, enum ffm_mode mode);
+void window_manager_set_window_sublayer_auto_enabled(struct window_manager *wm, bool enabled);
+void window_manager_set_manage_enabled(struct space_manager *sm, struct window_manager *wm, bool enabled);
 enum window_op_error window_manager_set_window_insertion(struct space_manager *sm, struct window *window, int direction);
 enum window_op_error window_manager_stack_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);
 enum window_op_error window_manager_warp_window(struct space_manager *sm, struct window_manager *wm, struct window *a, struct window *b);

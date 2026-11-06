@@ -4,33 +4,117 @@ extern struct display_manager g_display_manager;
 extern struct space_manager g_space_manager;
 extern struct window_manager g_window_manager;
 extern struct mouse_state g_mouse_state;
+
+// A preview is a provisional gesture. Aborting it must also disable the
+// mouse resize action so subsequent drag events cannot fall through to AX
+// resizing before the physical mouse button is released.
+static void mouse_abort_bsp_preview_gesture(struct mouse_state *state)
+{
+    if (!state->preview_resize_active) return;
+    bsp_resize_preview_cancel();
+    state->preview_resize_active = false;
+    state->current_action = MOUSE_MODE_NONE;
+    state->window = NULL;
+    state->live_resized = false;
+    state->resize_applied = false;
+}
+
+// Live BSP resize owns all tiles in the dragged window's view, not just the
+// grabbed tile. AX moved/resized notifications for neighbors must not launch
+// competing layout flushes while the gesture is in progress.
+static bool mouse_live_resize_controls_view(struct view *candidate)
+{
+    if (!candidate || !g_mouse_state.window ||
+        g_mouse_state.preview_resize_active ||
+        !g_mouse_state.bsp_live_resize ||
+        g_mouse_state.current_action != MOUSE_MODE_RESIZE) return false;
+    struct view *active = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
+    return active && active == candidate && active->layout == VIEW_BSP;
+}
 extern enum mission_control_mode g_mission_control_mode;
 extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
+void window_reconciliation_tick(void);
 volatile bool __pending_window_focus;
 volatile bool __pending_gesture;
 volatile uint64_t __last_gesture_time;
 volatile uint64_t __last_cmd_tab_time;
 
+// Keep the usual notification update allocation-free, but grow rather than
+// overflow its stack buffer if more windows are ever tracked.
+static bool window_notification_append(uint32_t **list, int *count, int *capacity,
+                                       bool *heap_allocated, uint32_t window_id)
+{
+    if (*count >= *capacity) {
+        // Do not overflow a signed int when doubling the capacity.
+        if (*capacity > 0x3fffffff) return false;
+        int new_capacity = *capacity * 2;
+        size_t bytes = (size_t) new_capacity * sizeof(uint32_t);
+        uint32_t *expanded = *heap_allocated ? realloc(*list, bytes) : malloc(bytes);
+        if (!expanded) return false;
+
+        if (!*heap_allocated) memcpy(expanded, *list, (size_t) *count * sizeof(uint32_t));
+        *list = expanded;
+        *capacity = new_capacity;
+        *heap_allocated = true;
+    }
+
+    (*list)[(*count)++] = window_id;
+    return true;
+}
+
 static void update_window_notifications(void)
 {
     int window_count = 0;
-    uint32_t window_list[1024] = {0};
+    uint32_t local_window_list[1024] = {0};
+    uint32_t *window_list = local_window_list;
+    int window_capacity = (int) array_count(local_window_list);
+    bool heap_allocated = false;
+    bool complete = true;
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         // NOTE(asmvik): Subscribe to all windows because of window_destroyed (and ordered) notifications
         table_for (struct window *window, g_window_manager.window, {
-            window_list[window_count++] = window->id;
+            if (complete && !window_notification_append(&window_list, &window_count,
+                                                         &window_capacity, &heap_allocated, window->id)) {
+                complete = false;
+            }
         })
     } else {
         // NOTE(asmvik): Subscribe to windows that have a feedback_border because of window_ordered notifications
         table_for (struct window_node *node, g_window_manager.insert_feedback, {
-            window_list[window_count++] = node->window_order[0];
+            if (complete && !window_notification_append(&window_list, &window_count,
+                                                         &window_capacity, &heap_allocated, node->window_order[0])) {
+                complete = false;
+            }
         })
     }
 
-    SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+    // Do not subscribe with a truncated list after allocation failure.
+    if (complete) {
+        CGError err = SLSRequestNotificationsForWindows(g_connection, window_list, window_count);
+        if (err != kCGErrorSuccess) {
+            fprintf(stderr, "yabai: window notification subscription failed (count=%d, error=%d)\n",
+                    window_count, (int)err);
+        }
+
+        // The private API reportedly rejects 1024+ windows on some versions;
+        // the actual limit is unverified. Report the risk without silently
+        // dropping windows or changing subscription semantics.
+        static bool warned_large_subscription = false;
+        if (window_count >= 1024 && !warned_large_subscription) {
+            fprintf(stderr, "yabai: window notification subscription for %d windows is unverified; check event delivery\n",
+                    window_count);
+            warned_large_subscription = true;
+        } else if (window_count < 1024) {
+            warned_large_subscription = false;
+        }
+    } else {
+        fprintf(stderr, "yabai: unable to allocate window-notification list\n");
+    }
+
+    if (heap_allocated) free(window_list);
 }
 
 static void window_did_receive_focus(struct window_manager *wm, struct mouse_state *ms, struct window *window)
@@ -43,7 +127,11 @@ static void window_did_receive_focus(struct window_manager *wm, struct mouse_sta
     window_manager_set_window_opacity(wm, window, wm->active_window_opacity);
 
     if (wm->focused_window_id != window->id) {
-        if (ms->ffm_window_id != window->id) {
+        // Do not warp the cursor for transient PiP, dialog, or other ineligible focus.
+        // Both ends of a genuine window focus transition must be eligible.
+        bool entering_eligible = window->is_eligible;
+        bool leaving_eligible = !focused_window || focused_window->is_eligible;
+        if (ms->ffm_window_id != window->id && entering_eligible && leaving_eligible) {
             window_manager_center_mouse(wm, window);
         }
 
@@ -242,7 +330,7 @@ static EVENT_HANDLER(APPLICATION_LAUNCHED)
         view_clear_flag(view, VIEW_IS_DIRTY);
     }
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         update_window_notifications();
     }
 }
@@ -302,7 +390,11 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
             view_list[view_count++] = view;
         }
 
-        if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+        if (g_mouse_state.window == window) {
+            bsp_resize_preview_cancel();
+            g_mouse_state.preview_resize_active = false;
+            g_mouse_state.window = NULL;
+        }
         if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
         if (window->is_eligible) {
@@ -336,7 +428,7 @@ static EVENT_HANDLER(APPLICATION_TERMINATED)
         view_clear_flag(view, VIEW_IS_DIRTY);
     }
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         update_window_notifications();
     }
 
@@ -595,7 +687,7 @@ static EVENT_HANDLER(WINDOW_CREATED)
         event_signal_push(SIGNAL_WINDOW_CREATED, window);
     }
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         update_window_notifications();
     }
 }
@@ -616,7 +708,11 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
         window_manager_remove_managed_window(&g_window_manager, window->id);
     }
 
-    if (g_mouse_state.window == window) g_mouse_state.window = NULL;
+    if (g_mouse_state.window == window) {
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
+        g_mouse_state.window = NULL;
+    }
     if (g_mouse_state.ffm_window_id == window->id) g_mouse_state.ffm_window_id = 0;
 
     if (window->is_eligible) {
@@ -628,7 +724,7 @@ static EVENT_HANDLER(WINDOW_DESTROYED)
     window_unobserve(window);
     window_destroy(window);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         update_window_notifications();
     }
 }
@@ -704,7 +800,7 @@ static EVENT_HANDLER(WINDOW_MOVED)
 
         if (!g_mouse_state.window || g_mouse_state.window != window) {
             struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-            if (view) {
+            if (view && !mouse_live_resize_controls_view(view)) {
                 struct window_node *node = view_find_window_node(view, window->id);
                 if (node && (AX_DIFF(node->area.x, new_origin.x) ||
                              AX_DIFF(node->area.y, new_origin.y))
@@ -739,7 +835,10 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     }
 
     CGRect new_frame = window_ax_frame(window);
-    if (CGRectEqualToRect(new_frame, window->frame)) {
+    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
+    bool is_fullscreen = window_is_fullscreen(window);
+
+    if (was_fullscreen == is_fullscreen && CGRectEqualToRect(new_frame, window->frame)) {
         debug("%s:DEBOUNCED %s %d\n", __FUNCTION__, window->application->name, window->id);
         return;
     }
@@ -747,16 +846,13 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     debug("%s: %s %d\n", __FUNCTION__, window->application->name, window->id);
     event_signal_push(SIGNAL_WINDOW_RESIZED, window);
 
-    bool was_fullscreen = window_check_flag(window, WINDOW_FULLSCREEN);
-
-    bool is_fullscreen = window_is_fullscreen(window);
     if (is_fullscreen) {
         window_set_flag(window, WINDOW_FULLSCREEN);
     } else {
         window_clear_flag(window, WINDOW_FULLSCREEN);
     }
 
-    if (was_fullscreen != is_fullscreen) {
+    if (!was_fullscreen && is_fullscreen) {
         if (window_ax_can_move(window)) {
             window_set_flag(window, WINDOW_MOVABLE);
         } else {
@@ -774,12 +870,9 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
         if (window->subrole) CFRelease(window->subrole);
         window->subrole = window_ax_subrole(window);
-    }
 
-    bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
-    window->frame = new_frame;
+        window->frame = new_frame;
 
-    if (!was_fullscreen && is_fullscreen) {
         struct view *view = window_manager_find_managed_window(&g_window_manager, window);
         if (view) {
             space_manager_untile_window(view, window);
@@ -789,11 +882,57 @@ static EVENT_HANDLER(WINDOW_RESIZED)
     } else if (was_fullscreen && !is_fullscreen) {
         window_manager_wait_for_native_fullscreen_transition(window);
 
-        if (window_manager_should_manage_window(window) && !window_manager_find_managed_window(&g_window_manager, window)) {
-            struct view *view = space_manager_tile_window_on_space(&g_space_manager, window, window_space(window->id));
-            window_manager_add_managed_window(&g_window_manager, window, view);
+        int attempts = 0;
+        while (!window_ax_can_move(window) && attempts++ < 15) {
+            usleep(20000);
+        }
+
+        if (window_ax_can_move(window)) {
+            window_set_flag(window, WINDOW_MOVABLE);
+        } else {
+            window_clear_flag(window, WINDOW_MOVABLE);
+        }
+
+        if (window_ax_can_resize(window)) {
+            window_set_flag(window, WINDOW_RESIZABLE);
+        } else {
+            window_clear_flag(window, WINDOW_RESIZABLE);
+        }
+
+        if (window->role) CFRelease(window->role);
+        window->role = window_ax_role(window);
+
+        if (window->subrole) CFRelease(window->subrole);
+        window->subrole = window_ax_subrole(window);
+
+        window->frame = window_ax_frame(window);
+
+        uint64_t sid = window_space(window->id);
+        if (!sid || !space_is_user(sid)) {
+            sid = space_manager_active_space();
+        }
+
+        if (window_manager_should_manage_window(window)) {
+            struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+            if (!view) {
+                view = space_manager_tile_window_on_space(&g_space_manager, window, sid);
+                window_manager_add_managed_window(&g_window_manager, window, view);
+            }
+
+            if (view && view->layout != VIEW_FLOAT) {
+                view_update(view);
+                if (space_is_visible(view->sid)) {
+                    window_node_flush(view->root);
+                    view_clear_flag(view, VIEW_IS_DIRTY);
+                } else {
+                    view_set_flag(view, VIEW_IS_DIRTY);
+                }
+            }
         }
     } else if (!was_fullscreen == !is_fullscreen) {
+        bool windowed_fullscreen = CGRectEqualToRect(window->windowed_frame, window->frame);
+        window->frame = new_frame;
+
         if (g_mouse_state.current_action == MOUSE_MODE_MOVE && g_mouse_state.window == window) {
             g_mouse_state.window_frame.size = g_mouse_state.window->frame.size;
         }
@@ -803,7 +942,7 @@ static EVENT_HANDLER(WINDOW_RESIZED)
 
             if (!g_mouse_state.window || g_mouse_state.window != window) {
                 struct view *view = window_manager_find_managed_window(&g_window_manager, window);
-                if (view) {
+                if (view && !mouse_live_resize_controls_view(view)) {
                     struct window_node *node = view_find_window_node(view, window->id);
                     if (node && (AX_DIFF(node->area.x, new_frame.origin.x)   ||
                                  AX_DIFF(node->area.y, new_frame.origin.y)   ||
@@ -979,6 +1118,7 @@ static EVENT_HANDLER(SLS_SPACE_CREATED)
 
 static EVENT_HANDLER(SLS_SPACE_DESTROYED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint64_t sid = (uint64_t)(intptr_t) context;
     struct view *view = table_find(&g_space_manager.view, &sid);
     if (view) {
@@ -993,6 +1133,8 @@ static EVENT_HANDLER(SLS_SPACE_DESTROYED)
 
 static EVENT_HANDLER(SPACE_CHANGED)
 {
+    // Preview overlays must not outlive the Space on which they were drawn.
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     g_space_manager.last_space_id = g_space_manager.current_space_id;
     g_space_manager.current_space_id = space_manager_active_space();
 
@@ -1030,6 +1172,7 @@ static EVENT_HANDLER(SPACE_CHANGED)
 
 static EVENT_HANDLER(DISPLAY_CHANGED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t new_did = display_manager_active_display_id();
     if (g_display_manager.current_display_id == new_did) {
         debug("%s: newly activated display %d was already active (%d)! ignoring event..\n", __FUNCTION__, g_display_manager.current_display_id, new_did);
@@ -1082,6 +1225,7 @@ static EVENT_HANDLER(DISPLAY_CHANGED)
 
 static EVENT_HANDLER(DISPLAY_ADDED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_handle_display_add(&g_space_manager, did);
@@ -1091,6 +1235,7 @@ static EVENT_HANDLER(DISPLAY_ADDED)
 
 static EVENT_HANDLER(DISPLAY_REMOVED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     display_manager_remove_label_for_display(&g_display_manager, did);
@@ -1100,6 +1245,7 @@ static EVENT_HANDLER(DISPLAY_REMOVED)
 
 static EVENT_HANDLER(DISPLAY_MOVED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid(&g_space_manager);
@@ -1108,6 +1254,7 @@ static EVENT_HANDLER(DISPLAY_MOVED)
 
 static EVENT_HANDLER(DISPLAY_RESIZED)
 {
+    mouse_abort_bsp_preview_gesture(&g_mouse_state);
     uint32_t did = (uint32_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, did);
     space_manager_mark_spaces_invalid_for_display(&g_space_manager, did);
@@ -1128,6 +1275,9 @@ static EVENT_HANDLER(MOUSE_DOWN)
     g_mouse_state.window = window;
     g_mouse_state.window_frame = g_mouse_state.window->frame;
     g_mouse_state.down_location = point;
+    g_mouse_state.origin_location = point;
+    g_mouse_state.resize_applied = false;
+    g_mouse_state.preview_resize_active = false;
     g_mouse_state.direction = 0;
 
     int64_t button = CGEventGetIntegerValueField(context, kCGMouseEventButtonNumber);
@@ -1140,6 +1290,22 @@ static EVENT_HANDLER(MOUSE_DOWN)
     }
 
     if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+        g_mouse_state.live_resized = false;
+        struct view *resize_view = window_manager_find_managed_window(&g_window_manager, window);
+        if (resize_view && resize_view->layout == VIEW_BSP) {
+            if (g_mouse_state.bsp_resize_preview) {
+                g_mouse_state.preview_resize_active = bsp_resize_preview_begin(resize_view, window->id);
+                if (!g_mouse_state.preview_resize_active) {
+                    // Do not silently fall back to real-window mutation.
+                    debug("bsp_resize_preview: could not start gesture\n");
+                    g_mouse_state.current_action = MOUSE_MODE_NONE;
+                    g_mouse_state.window = NULL;
+                    goto out;
+                }
+            } else if (g_mouse_state.bsp_live_resize) {
+                view_clear_live_resize_requests(resize_view);
+            }
+        }
         CGPoint frame_mid = { CGRectGetMidX(g_mouse_state.window_frame), CGRectGetMidY(g_mouse_state.window_frame) };
         if (point.x < frame_mid.x) g_mouse_state.direction |= HANDLE_LEFT;
         if (point.y < frame_mid.y) g_mouse_state.direction |= HANDLE_TOP;
@@ -1172,10 +1338,37 @@ static EVENT_HANDLER(MOUSE_UP)
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
     if (!src_view) goto err;
 
+    if (g_mouse_state.preview_resize_active) {
+        // Preview commits are semantic resize gestures, never window drops.
+        // Do not run generic mouse-up classification against optimistic AX
+        // frame caches: it can misinterpret a top-edge resize as a move.
+        bool changed = g_mouse_state.live_resized;
+        if (!bsp_resize_preview_commit(src_view) && changed) {
+            debug("bsp_resize_preview: canceled stale or invalid preview\n");
+        }
+        view_clear_live_resize_requests(src_view);
+        goto err;
+    }
+
+    // A cross-display move can complete before its AX moved notification is
+    // processed. Use the actual release-time frame to classify the drop.
+    if (g_mouse_state.current_action == MOUSE_MODE_MOVE) {
+        CGRect actual = window_ax_frame(g_mouse_state.window);
+        if (actual.size.width > 0.0f && actual.size.height > 0.0f) {
+            g_mouse_state.window->frame = actual;
+        }
+    }
+
     struct mouse_window_info info;
     mouse_window_info_populate(&g_mouse_state, &info);
 
-    if (info.changed_position && !info.changed_size) {
+    bool cursor_moved = mouse_gesture_moved(&g_mouse_state, point);
+
+    // Mouse-up commits the drop. Source BSP flushes must include the
+    // previously dragged window again, even though its pointer remains set.
+    g_mouse_state.current_action = MOUSE_MODE_NONE;
+
+    if (cursor_moved && info.changed_position && !info.changed_size) {
         uint64_t cursor_sid = display_space_id(display_manager_point_display_id(point));
         struct view *dst_view = space_manager_find_view(&g_space_manager, cursor_sid);
 
@@ -1220,27 +1413,46 @@ static EVENT_HANDLER(MOUSE_UP)
         } else if (a_node) {
             mouse_drop_no_target(&g_space_manager, &g_window_manager, src_view, dst_view, g_mouse_state.window, a_node);
         }
-    } else if (info.changed_position || info.changed_size) {
-        mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
+    } else if (cursor_moved && (info.changed_position || info.changed_size)) {
+        if (!g_mouse_state.live_resized) {
+            mouse_drop_try_adjust_bsp_grid(&g_window_manager, src_view, g_mouse_state.window, &info);
+        }
+    }
+
+    if (g_mouse_state.live_resized) {
+        // AX events resume normal cache ownership after the gesture ends.
+        view_clear_live_resize_requests(src_view);
     }
 
 err:
     g_mouse_state.window = NULL;
 res:
+    bsp_resize_preview_cancel();
+    g_mouse_state.preview_resize_active = false;
+    g_mouse_state.live_resized = false;
+    g_mouse_state.resize_applied = false;
     g_mouse_state.current_action = MOUSE_MODE_NONE;
 out:
+    if (mission_control_is_active()) {
+        mouse_abort_bsp_preview_gesture(&g_mouse_state);
+    }
     CFRelease(context);
 }
 
 static EVENT_HANDLER(MOUSE_DRAGGED)
 {
-    if (mission_control_is_active()) goto out;
-    if (!g_mouse_state.window)       goto out;
+    if (mission_control_is_active()) {
+        mouse_abort_bsp_preview_gesture(&g_mouse_state);
+        goto out;
+    }
+    if (!g_mouse_state.window) goto out;
 
     if (!__sync_bool_compare_and_swap(&g_mouse_state.window->id_ptr, &g_mouse_state.window->id, &g_mouse_state.window->id)) {
         debug("%s: %d has been marked invalid by the system, ignoring event..\n", __FUNCTION__, g_mouse_state.window->id);
         g_mouse_state.window = NULL;
         g_mouse_state.current_action = MOUSE_MODE_NONE;
+        bsp_resize_preview_cancel();
+        g_mouse_state.preview_resize_active = false;
         CFRelease(context);
         return;
     }
@@ -1262,17 +1474,59 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             window_manager_move_window(g_mouse_state.window, new_point.x, new_point.y);
         }
     } else if (g_mouse_state.current_action == MOUSE_MODE_RESIZE) {
+        struct view *view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
+        bool is_bsp_preview = g_mouse_state.preview_resize_active;
+        bool is_bsp_live = !is_bsp_preview && g_mouse_state.bsp_live_resize &&
+                           view && view->layout == VIEW_BSP;
+
         uint64_t event_time = read_os_timer();
-        float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float)read_os_freq());
-        if (dt < 67.67f) goto out;
+        float dt = ((float) event_time - g_mouse_state.last_moved_time) * (1000.0f / (float) read_os_freq());
+        float min_dt = is_bsp_live ? 33.0f : 16.0f;
+        if (dt < min_dt) goto out;
 
         int dx = point.x - g_mouse_state.down_location.x;
         int dy = point.y - g_mouse_state.down_location.y;
+        if (abs(dx) < 2 && abs(dy) < 2) goto out;
 
-        window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
+        bool step_applied = false;
+        if (is_bsp_live || is_bsp_preview) {
+            uint8_t direction = 0;
+            if (dx != 0) {
+                if (g_mouse_state.direction & HANDLE_LEFT) direction |= HANDLE_LEFT;
+                if (g_mouse_state.direction & HANDLE_RIGHT) direction |= HANDLE_RIGHT;
+            }
+            if (dy != 0) {
+                if (g_mouse_state.direction & HANDLE_TOP) direction |= HANDLE_TOP;
+                if (g_mouse_state.direction & HANDLE_BOTTOM) direction |= HANDLE_BOTTOM;
+            }
+
+            if (direction != 0) {
+                if (is_bsp_preview) {
+                    step_applied = bsp_resize_preview_adjust(view, direction, dx, dy);
+                    if (step_applied) g_mouse_state.live_resized = true;
+                } else {
+                    enum window_op_error err = window_manager_resize_window_relative(&g_window_manager, g_mouse_state.window, direction, dx, dy, false);
+                    if (err == WINDOW_OP_ERROR_SUCCESS) {
+                        g_mouse_state.live_resized = true;
+                        step_applied = true;
+                    }
+                }
+                // Never freely resize a managed BSP tile on an unsupported axis.
+            }
+        } else {
+            // Classic mode resizes only the grabbed client until mouse-up.
+            window_manager_resize_window_relative_internal(g_mouse_state.window, g_mouse_state.window->frame, g_mouse_state.direction, dx, dy, false);
+            step_applied = true;
+        }
 
         g_mouse_state.last_moved_time = event_time;
-        g_mouse_state.down_location = point;
+        if (step_applied) {
+            // Preserve unconsumed pointer displacement after an AX rejection
+            // so a subsequent sample can cross a size-quantization threshold.
+            g_mouse_state.down_location = point;
+            g_mouse_state.resize_applied = true;
+        }
+        goto out;
     }
 
     struct view *src_view = window_manager_find_managed_window(&g_window_manager, g_mouse_state.window);
@@ -1324,6 +1578,9 @@ static EVENT_HANDLER(MOUSE_DRAGGED)
             } break;
             }
 
+            // A stack target previews the whole stack, never a split edge.
+            if (insert_dir && dst_view->layout == VIEW_STACK) insert_dir = STACK;
+
             if (b_node->insert_dir != insert_dir) {
                 b_node->insert_dir = insert_dir;
                 insert_feedback_show(b_node);
@@ -1354,11 +1611,16 @@ static EVENT_HANDLER(MOUSE_MOVED)
     if (dt < 1250.0f) goto out;
 
     CGPoint point = CGEventGetLocation(context);
+
+    struct window *focused_window = window_manager_find_window(&g_window_manager, g_window_manager.focused_window_id);
+    if (focused_window && window_check_rule_flag(focused_window, WINDOW_RULE_FFM) && !window_check_rule_flag(focused_window, WINDOW_RULE_FFM_VALUE)) goto out;
+
     struct window *window = window_manager_find_window_at_point(&g_window_manager, point);
 
     if (window) {
         if (window->id == g_window_manager.focused_window_id) goto out;
         if (!window_manager_is_window_eligible(window))       goto out;
+        if (window_check_rule_flag(window, WINDOW_RULE_FFM) && !window_check_rule_flag(window, WINDOW_RULE_FFM_VALUE)) goto out;
 
         if (g_window_manager.ffm_mode == FFM_AUTOFOCUS) {
 
@@ -1550,7 +1812,7 @@ static EVENT_HANDLER(DOCK_DID_RESTART)
         workspace_is_macos_ventura() ||
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+        (workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
         mission_control_unobserve();
         mission_control_observe();
     }
@@ -1611,6 +1873,11 @@ static EVENT_HANDLER(SYSTEM_WOKE)
     event_signal_push(SIGNAL_SYSTEM_WOKE, NULL);
 }
 
+static EVENT_HANDLER(WINDOW_RECONCILE)
+{
+    window_reconciliation_tick();
+}
+
 static EVENT_HANDLER(DAEMON_MESSAGE)
 {
     TIME_FUNCTION;
@@ -1644,6 +1911,13 @@ static EVENT_HANDLER(DAEMON_MESSAGE)
 }
 #pragma clang diagnostic pop
 
+// Only consecutive motion samples may be collapsed. The last observed
+// position wins, but mouse-up/down and other events remain ordering barriers.
+static inline bool event_loop_can_coalesce(enum event_type current, enum event_type next)
+{
+    return (current == MOUSE_DRAGGED || current == MOUSE_MOVED) && current == next;
+}
+
 static void *event_loop_run(void *context)
 {
     struct event *head, *next;
@@ -1661,7 +1935,21 @@ static void *event_loop_run(void *context)
                 if (!next) goto empty;
             } while (!__sync_bool_compare_and_swap(&event_loop->head, head, next));
 
-            switch (__atomic_load_n(&next->type, __ATOMIC_RELAXED)) {
+            // Coalesce only consecutive motion events of the same type; never
+            // cross mouse-up/down or any other event-ordering boundary.
+            enum event_type type = __atomic_load_n(&next->type, __ATOMIC_RELAXED);
+            if (type == MOUSE_DRAGGED || type == MOUSE_MOVED) {
+                struct event *peek;
+                while ((peek = __atomic_load_n(&next->next, __ATOMIC_RELAXED)) != NULL) {
+                    if (!event_loop_can_coalesce(type, __atomic_load_n(&peek->type, __ATOMIC_RELAXED))) break;
+                    if (!__sync_bool_compare_and_swap(&event_loop->head, next, peek)) break;
+                    void *old_context = __atomic_load_n(&next->context, __ATOMIC_RELAXED);
+                    if (old_context) CFRelease(old_context);
+                    next = peek;
+                }
+            }
+
+            switch (type) {
 #define EVENT_TYPE_ENTRY(value) case value: EVENT_HANDLER_##value(__atomic_load_n(&next->context, __ATOMIC_RELAXED), __atomic_load_n(&next->param1, __ATOMIC_RELAXED)); break;
                 EVENT_TYPE_LIST
 #undef EVENT_TYPE_ENTRY

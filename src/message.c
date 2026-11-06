@@ -21,7 +21,11 @@ extern bool g_verbose;
 
 /* --------------------------------DOMAIN CONFIG-------------------------------- */
 #define COMMAND_CONFIG_DEBUG_OUTPUT          "debug_output"
+#define COMMAND_CONFIG_WINDOW_RECONCILIATION "window_reconciliation"
+#define COMMAND_CONFIG_RECONCILIATION_INTERVAL "window_reconciliation_interval"
 #define COMMAND_CONFIG_MFF                   "mouse_follows_focus"
+#define COMMAND_CONFIG_MANAGE                "manage"
+#define COMMAND_CONFIG_WINDOW_SUBLAYER_AUTO  "window_sublayer_auto"
 #define COMMAND_CONFIG_FFM                   "focus_follows_mouse"
 #define COMMAND_CONFIG_DISPLAY_ORDER         "display_arrangement_order"
 #define COMMAND_CONFIG_WINDOW_ORIGIN         "window_origin_display"
@@ -50,6 +54,9 @@ extern bool g_verbose;
 #define COMMAND_CONFIG_MOUSE_ACTION1         "mouse_action1"
 #define COMMAND_CONFIG_MOUSE_ACTION2         "mouse_action2"
 #define COMMAND_CONFIG_MOUSE_DROP_ACTION     "mouse_drop_action"
+#define COMMAND_CONFIG_MOUSE_BSP_LIVE_RESIZE "mouse_bsp_live_resize"
+#define COMMAND_CONFIG_MOUSE_BSP_RESIZE_PREVIEW "mouse_bsp_resize_preview"
+#define COMMAND_CONFIG_MOUSE_LIVE_RESIZE     "mouse_live_resize"
 #define COMMAND_CONFIG_EXTERNAL_BAR          "external_bar"
 #define COMMAND_CONFIG_SKIP_SPACE_ANIMATION  "skip_window_focus_animation"
 
@@ -112,6 +119,12 @@ extern bool g_verbose;
 #define COMMAND_SPACE_TOGGLE   "--toggle"
 #define COMMAND_SPACE_LAYOUT   "--layout"
 #define COMMAND_SPACE_LABEL    "--label"
+#define COMMAND_SPACE_SAVE_LAYOUT   "--save-layout"
+#define COMMAND_SPACE_LOAD_LAYOUT   "--load-layout"
+#define COMMAND_SPACE_DUMP_LAYOUT   "--dump-layout"
+#define COMMAND_SPACE_SAVE_SESSION  "--save-session"
+#define COMMAND_SPACE_LOAD_SESSION  "--load-session"
+#define COMMAND_SPACE_DUMP_SESSION  "--dump-session"
 
 #define ARGUMENT_SPACE_ROTATE_90    "90"
 #define ARGUMENT_SPACE_ROTATE_180   "180"
@@ -129,6 +142,7 @@ extern bool g_verbose;
 
 /* --------------------------------DOMAIN WINDOW-------------------------------- */
 #define COMMAND_WINDOW_FOCUS      "--focus"
+#define COMMAND_WINDOW_REFRESH    "--refresh"
 #define COMMAND_WINDOW_CLOSE      "--close"
 #define COMMAND_WINDOW_MINIMIZE   "--minimize"
 #define COMMAND_WINDOW_DEMINIMIZE "--deminimize"
@@ -206,6 +220,7 @@ extern bool g_verbose;
 #define ARGUMENT_RULE_KEY_MANAGE     "manage"
 #define ARGUMENT_RULE_KEY_STICKY     "sticky"
 #define ARGUMENT_RULE_KEY_MFF        "mouse_follows_focus"
+#define ARGUMENT_RULE_KEY_FFM        "focus_follows_mouse"
 #define ARGUMENT_RULE_KEY_SUB_LAYER  "sub-layer"
 #define ARGUMENT_RULE_KEY_FULLSCR    "native-fullscreen"
 #define ARGUMENT_RULE_KEY_GRID       "grid"
@@ -1149,6 +1164,44 @@ static struct selector parse_insert_selector(FILE *rsp, char **message)
     return result;
 }
 
+// Zen can create native windows without emitting an AX creation event.
+// Reconcile only Zen by default; users may opt out via config. The dispatch
+// timer runs on the main queue and posts to the owning event-loop thread.
+static bool g_window_reconciliation_enabled = true;
+static int g_window_reconciliation_interval_ms = 750;
+static dispatch_source_t g_window_reconciliation_timer;
+static bool g_window_reconciliation_pending;
+
+static void window_reconciliation_update_timer(void)
+{
+    if (!g_window_reconciliation_timer) {
+        if (!g_window_reconciliation_enabled) return;
+
+        g_window_reconciliation_timer = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        if (!g_window_reconciliation_timer) return;
+
+        dispatch_source_set_event_handler(g_window_reconciliation_timer, ^{
+            // A slow AX scan must not allow timer events to accumulate.
+            if (!__atomic_exchange_n(&g_window_reconciliation_pending, true, __ATOMIC_ACQ_REL)) {
+                event_loop_post(&g_event_loop, WINDOW_RECONCILE, NULL, 0);
+            }
+        });
+        dispatch_resume(g_window_reconciliation_timer);
+    }
+
+    if (g_window_reconciliation_enabled) {
+        uint64_t ns = (uint64_t)g_window_reconciliation_interval_ms * NSEC_PER_MSEC;
+        dispatch_source_set_timer(g_window_reconciliation_timer,
+                                  dispatch_time(DISPATCH_TIME_NOW, ns), ns,
+                                  50 * NSEC_PER_MSEC);
+    } else {
+        // Do not keep waking the daemon when the feature is disabled.
+        dispatch_source_set_timer(g_window_reconciliation_timer,
+                                  DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
+    }
+}
+
 static void handle_domain_config(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
@@ -1167,7 +1220,32 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
     }
 
     for (; token_is_valid(command); command = get_token(&message)) {
-        if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
+        if (token_equals(command, COMMAND_CONFIG_WINDOW_RECONCILIATION)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_reconciliation_enabled]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON) ||
+                       token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                g_window_reconciliation_enabled = token_equals(value, ARGUMENT_COMMON_VAL_ON);
+                window_reconciliation_update_timer();
+            } else {
+                daemon_fail(rsp, "window_reconciliation expects 'on' or 'off'.\n");
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_RECONCILIATION_INTERVAL)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%d\n", g_window_reconciliation_interval_ms);
+            } else {
+                int interval;
+                if (value.length > 5 || !token_is_positive_integer(value, &interval) ||
+                    interval < 250 || interval > 10000) {
+                    daemon_fail(rsp, "window_reconciliation_interval must be 250..10000 ms.\n");
+                } else {
+                    g_window_reconciliation_interval_ms = interval;
+                    window_reconciliation_update_timer();
+                }
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_DEBUG_OUTPUT)) {
             struct token value = get_token(&message);
             if (!token_is_valid(value)) {
                 fprintf(rsp, "%s\n", bool_str[g_verbose]);
@@ -1188,6 +1266,24 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 g_window_manager.enable_mff = true;
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MANAGE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_manager.manage]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF) || token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                window_manager_set_manage_enabled(&g_space_manager, &g_window_manager, token_equals(value, ARGUMENT_COMMON_VAL_ON));
+            } else {
+                daemon_fail(rsp, "manage expects 'on' or 'off'.\n");
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_WINDOW_SUBLAYER_AUTO)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_window_manager.enable_window_sublayer_auto]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF) || token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                window_manager_set_window_sublayer_auto_enabled(&g_window_manager, token_equals(value, ARGUMENT_COMMON_VAL_ON));
+            } else {
+                daemon_fail(rsp, "window_sublayer_auto expects 'on' or 'off'.\n");
             }
         } else if (token_equals(command, COMMAND_CONFIG_FFM)) {
             struct token value = get_token(&message);
@@ -1500,26 +1596,21 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_BSP)) {
                     if (space_is_user(sel_sid)) {
                         view_set_flag(view, VIEW_LAYOUT);
-                        view->layout = VIEW_BSP;
-                        view_clear(view);
-                        window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, sel_sid);
+                        space_manager_set_layout_for_space(&g_space_manager, sel_sid, VIEW_BSP);
                     } else {
                         daemon_fail(rsp, "cannot set layout for a macOS fullscreen space!\n");
                     }
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_STACK)) {
                     if (space_is_user(sel_sid)) {
                         view_set_flag(view, VIEW_LAYOUT);
-                        view->layout = VIEW_STACK;
-                        view_clear(view);
-                        window_manager_validate_and_check_for_windows_on_space(&g_space_manager, &g_window_manager, sel_sid);
+                        space_manager_set_layout_for_space(&g_space_manager, sel_sid, VIEW_STACK);
                     } else {
                         daemon_fail(rsp, "cannot set layout for a macOS fullscreen space!\n");
                     }
                 } else if (token_equals(value, ARGUMENT_CONFIG_LAYOUT_FLOAT)) {
                     if (space_is_user(sel_sid)) {
                         view_set_flag(view, VIEW_LAYOUT);
-                        view->layout = VIEW_FLOAT;
-                        view_clear(view);
+                        space_manager_set_layout_for_space(&g_space_manager, sel_sid, VIEW_FLOAT);
                     } else {
                         daemon_fail(rsp, "cannot set layout for a macOS fullscreen space!\n");
                     }
@@ -1662,6 +1753,28 @@ static void handle_domain_config(FILE *rsp, struct token domain, char *message)
                 g_mouse_state.drop_action = MOUSE_MODE_SWAP;
             } else if (token_equals(value, ARGUMENT_CONFIG_MOUSE_ACTION_STACK)) {
                 g_mouse_state.drop_action = MOUSE_MODE_STACK;
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_BSP_LIVE_RESIZE) || token_equals(command, COMMAND_CONFIG_MOUSE_LIVE_RESIZE)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_mouse_state.bsp_live_resize]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                g_mouse_state.bsp_live_resize = true;
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                g_mouse_state.bsp_live_resize = false;
+            } else {
+                daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
+            }
+        } else if (token_equals(command, COMMAND_CONFIG_MOUSE_BSP_RESIZE_PREVIEW)) {
+            struct token value = get_token(&message);
+            if (!token_is_valid(value)) {
+                fprintf(rsp, "%s\n", bool_str[g_mouse_state.bsp_resize_preview]);
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                g_mouse_state.bsp_resize_preview = true;
+            } else if (token_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                g_mouse_state.bsp_resize_preview = false;
             } else {
                 daemon_fail(rsp, "unknown value '%.*s' given to command '%.*s' for domain '%.*s'\n", value.length, value.text, command.length, command.text, domain.length, domain.text);
             }
@@ -2038,15 +2151,132 @@ static void handle_domain_space(FILE *rsp, struct token domain, char *message)
                     }
                 }
             }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                   path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_LAYOUT)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore(acting_sid, token_is_valid(value) ? value.text : NULL,
+                                      path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_LAYOUT)) {
+            char err[512] = {0};
+            if (!layout_store_dump(acting_sid, rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_SAVE_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_save_session(token_is_valid(value) ? value.text : NULL,
+                                           path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_LOAD_SESSION)) {
+            struct token value = get_token(&message);
+            char path[MAXLEN] = {0};
+            char err[512] = {0};
+            if (!layout_store_restore_session(token_is_valid(value) ? value.text : NULL,
+                                              path, sizeof(path), err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            } else {
+                fprintf(rsp, "%s\n", path);
+            }
+        } else if (token_equals(command, COMMAND_SPACE_DUMP_SESSION)) {
+            char err[512] = {0};
+            if (!layout_store_dump_session(rsp, err, sizeof(err))) {
+                daemon_fail(rsp, "yabai: %s\n", err);
+            }
         } else {
             daemon_fail(rsp, "unknown command '%.*s' for domain '%.*s'\n", command.length, command.text, domain.length, domain.text);
         }
     }
 }
 
+// Recover AX windows that were created without a kAXCreatedNotification.
+// The existing WINDOW_CREATED handler validates and manages each candidate.
+static void queue_missing_application_windows(struct application *application, int *queued)
+{
+    CFArrayRef window_list = application_window_list(application);
+    if (!window_list) return;
+
+    CFIndex count = CFArrayGetCount(window_list);
+    for (CFIndex i = 0; i < count; ++i) {
+        AXUIElementRef ref = (AXUIElementRef) CFArrayGetValueAtIndex(window_list, i);
+        uint32_t wid = ax_window_id(ref);
+        if (!wid || window_manager_find_window(&g_window_manager, wid)) continue;
+
+        // WINDOW_CREATED takes ownership of the retained AX reference.
+        event_loop_post(&g_event_loop, WINDOW_CREATED, (void *) CFRetain(ref), 0);
+        ++*queued;
+    }
+
+    CFRelease(window_list);
+}
+
+// Runs on the yabai event loop, never on the timer/main queue.
+void window_reconciliation_tick(void)
+{
+    if (g_window_reconciliation_enabled) {
+        int queued = 0;
+        table_for (struct application *application, g_window_manager.application, {
+            // Initial scope is intentionally limited to Zen (Firefox-derived).
+            if (!application->is_hidden && application->name &&
+                string_equals(application->name, "Zen")) {
+                queue_missing_application_windows(application, &queued);
+            }
+        })
+        if (queued) debug("window_reconciliation: queued %d Zen window(s)\n", queued);
+    }
+
+    __atomic_store_n(&g_window_reconciliation_pending, false, __ATOMIC_RELEASE);
+}
+
+static void refresh_untracked_windows(FILE *rsp)
+{
+    int queued = 0;
+    // The terminal invoking --refresh may have become frontmost, so inspect
+    // all non-hidden registered applications rather than only the active one.
+    table_for (struct application *application, g_window_manager.application, {
+        if (!application->is_hidden) {
+            queue_missing_application_windows(application, &queued);
+        }
+    })
+
+    fprintf(rsp, "queued %d previously untracked window(s)\n", queued);
+}
+
 static void handle_domain_window(FILE *rsp, struct token domain, char *message)
 {
     TIME_FUNCTION;
+
+    // Handle --refresh before resolving an acting window. No focused window
+    // is required and the command should not consume a window selector.
+    char *message_start = message;
+    struct token first = get_token(&message);
+    if (token_equals(first, COMMAND_WINDOW_REFRESH)) {
+        if (token_is_valid(get_token(&message))) {
+            daemon_fail(rsp, "'--refresh' does not accept additional arguments.\n");
+        } else {
+            refresh_untracked_windows(rsp);
+        }
+        return;
+    }
+    message = message_start;
 
     struct token command;
     struct window *acting_window = window_manager_focused_window(&g_window_manager);
@@ -2271,7 +2501,19 @@ static void handle_domain_window(FILE *rsp, struct token domain, char *message)
             struct token value = get_token(&message);
             if (token_equals(value, ARGUMENT_WINDOW_TOGGLE_FLOAT)) {
                 if (acting_window) {
-                    window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, !window_check_flag(acting_window, WINDOW_FLOAT), false);
+                    if (window_check_flag(acting_window, WINDOW_FLOAT)) {
+                        // An explicitly tiled window must survive layout-tree rebuilds.
+                        // This mirrors manage=on rules, even for nonstandard windows.
+                        window_set_rule_flag(acting_window, WINDOW_RULE_MANAGED);
+                        window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, false, false);
+                    } else {
+                        // Retain the managed override until the window is floated;
+                        // removing it earlier can fail eligibility checks.
+                        window_manager_make_window_floating(&g_space_manager, &g_window_manager, acting_window, true, false);
+                        if (window_check_flag(acting_window, WINDOW_FLOAT)) {
+                            window_clear_rule_flag(acting_window, WINDOW_RULE_MANAGED);
+                        }
+                    }
                 } else {
                     daemon_fail(rsp, "could not locate the window to act on!\n");
                 }
@@ -2743,13 +2985,24 @@ static bool parse_rule(FILE *rsp, char **message, struct rule *rule, struct toke
                 daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);
                 did_parse = false;
             }
-        } else if (string_equals(key, ARGUMENT_RULE_KEY_MFF)) {
+        } else if (string_equals(key, ARGUMENT_RULE_KEY_MFF) || string_equals(key, "mff")) {
             if (exclusion) unsupported_exclusion = key;
 
             if (string_equals(value, ARGUMENT_COMMON_VAL_ON)) {
                 rule->effects.mff = RULE_PROP_ON;
             } else if (string_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
                 rule->effects.mff = RULE_PROP_OFF;
+            } else {
+                daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);
+                did_parse = false;
+            }
+        } else if (string_equals(key, ARGUMENT_RULE_KEY_FFM) || string_equals(key, "ffm")) {
+            if (exclusion) unsupported_exclusion = key;
+
+            if (string_equals(value, ARGUMENT_COMMON_VAL_ON)) {
+                rule->effects.ffm = RULE_PROP_ON;
+            } else if (string_equals(value, ARGUMENT_COMMON_VAL_OFF)) {
+                rule->effects.ffm = RULE_PROP_OFF;
             } else {
                 daemon_fail(rsp, "invalid value '%s' for key '%s'\n", value, key);
                 did_parse = false;
@@ -3040,6 +3293,10 @@ bool message_loop_begin(char *socket_path)
 
     g_message_loop.is_running = true;
     pthread_create(&g_message_loop.thread, NULL, &message_loop_run, NULL);
+
+    // The event loop and window manager are initialized before this point.
+    // Start the Zen-only fallback even when yabairc does not set the option.
+    window_reconciliation_update_timer();
 
     return true;
 }

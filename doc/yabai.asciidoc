@@ -23,7 +23,7 @@ yabai - window manager
 Synopsis
 --------
 
-*yabai* [*--load-sa*|*--uninstall-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
+*yabai* [*--load-sa*|*--uninstall-sa*|*--check-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
 
 Description
 -----------
@@ -42,6 +42,14 @@ Options
     Uninstall the scripting-addition. Must be run as root. +
     Path is /Library/ScriptingAdditions/yabai.osax. +
     System Integrity Protection must be partially disabled.
+
+*--check-sa*::
+    Report whether the scripting-addition is loaded and healthy. +
+    Talks to the payload running inside Dock.app directly, so it reflects the
+    real running state rather than whether files are installed. +
+    Does not require root and does not re-inject. +
+    Exits 0 only when the payload responds, matches this build's version, and
+    advertises full support for the current macOS; non-zero otherwise.
 
 *--install-service*::
     Writes a launchd service file to disk. +
@@ -154,6 +162,16 @@ Global Settings
 *focus_follows_mouse* ['autofocus|autoraise|off']::
     Automatically focus the window under the mouse.
 
+*manage* ['<BOOL_SEL>']::
+    Automatically tile eligible windows. Default: 'on'. +
+    'off' allows rules with 'manage=on' and explicit 'window --toggle float' tiling while other windows remain floating. +
+    Changing this at runtime re-evaluates windows without explicit management overrides. +
+    A literal `yabai -m config manage off` in yabairc is detected before startup window import; computed or conditional shell commands are evaluated later and may briefly permit automatic tiling.
+
+*window_sublayer_auto* ['<BOOL_SEL>']::
+    Automatically place managed windows below floating windows when their layer is 'auto'. Default: 'on'. +
+    When 'off', automatically assigned sublayers remain normal rather than placing all floating windows above tiled windows.
+
 *display_arrangement_order* ['default|vertical|horizontal']::
     Specify how displays are ordered (determined by center point). +
     'default': Native macOS ordering. +
@@ -228,6 +246,19 @@ Global Settings
 
 *mouse_drop_action* ['swap|stack']::
     Action performed when a bsp-managed window is dropped in the center of some other bsp-managed window.
+
+*mouse_bsp_live_resize* ['<BOOL_SEL>']::
+    Resize BSP split boundaries and neighboring tiles as the mouse moves (default: on). +
+    With off, resize only the grabbed window during the drag and adjust its BSP split on mouse release. +
+    Live resizing uses direct, non-animated geometry updates; this setting is distinct from the proposed preview-only interaction mode. +
+    Alias: 'mouse_live_resize'.
+
+*mouse_bsp_resize_preview* ['<BOOL_SEL>']::
+    Preview BSP split boundaries using a non-interactive translucent overlay (default: off). +
+    During dragging, actual application windows and the authoritative BSP remain unchanged. +
+    On mouse release, apply the proposed split once. If the BSP topology or Space changes, discard the preview. +
+    When on, preview takes precedence over 'mouse_bsp_live_resize'; turning it off restores live or classic behavior according to that separate setting. +
+    Preview does not currently support zoomed BSP windows.
 
 Space Settings
 ^^^^^^^^^^^^^^
@@ -602,6 +633,39 @@ The properties that contain incorrect information for windows with `has-ax-refer
 }
 ----
 
+
+Workspace layout and session persistence
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+These commands explicitly save, inspect, or restore the current BSP layout or
+a multi-space workspace session as JSON. Restoring mutates window positions and
+layout trees; test with a disposable workspace first.
+
+*--save-layout ['<NAME_OR_PATH>']*::
+    Save the selected space's BSP layout to JSON. Named layouts are stored under
+    '~/.config/yabai/layouts/'.
+
+*--dump-layout*::
+    Print the selected space's BSP layout JSON without changing it.
+
+*--load-layout ['<NAME_OR_PATH>']*::
+    Restore a previously saved layout to the selected space. Only currently
+    available eligible windows can be matched; windows that are missing may
+    result in a partial reconstruction.
+
+*--save-session ['<NAME_OR_PATH>']*::
+    Save spaces and window-to-space assignments as a JSON session.
+
+*--dump-session*::
+    Print the current multi-space workspace session as JSON.
+
+*--load-session ['<NAME_OR_PATH>']*::
+    Restore a previously saved session. This can move windows between spaces.
+    Restoration across renamed displays, changed space indexes or missing
+    applications may be incomplete. The operation is not transactional and
+    does not automatically roll back a partial restoration.
+
+
 Rule
 ~~~~
 
@@ -670,6 +734,11 @@ ARGUMENT
 *mouse_follows_focus='<BOOL_SEL>'*::
     When focusing the window, put the mouse at its center. Overrides the global *mouse_follows_focus* setting.
 
+*focus_follows_mouse='<BOOL_SEL>'*::
+    Control whether mouse movement can transfer focus to or from this window when global *focus_follows_mouse* is enabled. +
+    Use 'off' to exclude applications such as virtual machines, games, or editors from automatic focus changes. +
+    The alias 'ffm' is supported.
+
 *sub-layer='<LAYER>'*::
     Window is ordered within the given stacking sub-layer. +
     The window will no longer be eligible for automatic change in sub-layer when managed/unmanaged. +
@@ -714,6 +783,7 @@ DATAFORMAT
     "manage": bool (optional),
     "sticky": bool (optional),
     "mouse_follows_focus": bool (optional),
+    "focus_follows_mouse": bool (optional),
     "sub-layer": string,
     "native-fullscreen": bool (optional),
     "grid": string,

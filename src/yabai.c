@@ -4,6 +4,7 @@
 
 #define SCRPT_ADD_LOAD_OPT      "--load-sa"
 #define SCRPT_ADD_UNINSTALL_OPT "--uninstall-sa"
+#define SCRPT_ADD_CHECK_OPT     "--check-sa"
 #define SERVICE_INSTALL_OPT     "--install-service"
 #define SERVICE_UNINSTALL_OPT   "--uninstall-service"
 #define SERVICE_START_OPT       "--start-service"
@@ -186,6 +187,7 @@ static void parse_arguments(int argc, char **argv)
                         "Options:\n"
                         "    --load-sa              Install and load the scripting-addition.\n"
                         "    --uninstall-sa         Uninstall the scripting-addition.\n"
+                        "    --check-sa             Report whether the scripting-addition is loaded and healthy.\n"
                         "    --install-service      Write launchd service file to disk.\n"
                         "    --uninstall-service    Remove launchd service file from disk.\n"
                         "    --start-service        Enable, load, and start the launchd service.\n"
@@ -218,6 +220,10 @@ static void parse_arguments(int argc, char **argv)
 
     if (string_equals(argv[1], SCRPT_ADD_LOAD_OPT)) {
         exit(scripting_addition_load());
+    }
+
+    if (string_equals(argv[1], SCRPT_ADD_CHECK_OPT)) {
+        exit(scripting_addition_status());
     }
 
     if (string_equals(argv[1], SERVICE_INSTALL_OPT)) {
@@ -312,13 +318,13 @@ int main(int argc, char **argv)
         workspace_is_macos_ventura() ||
         workspace_is_macos_sonoma() ||
         workspace_is_macos_sequoia() ||
-        workspace_is_macos_tahoe()) {
+        (workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
         mission_control_observe();
 
         if (workspace_is_macos_ventura() ||
             workspace_is_macos_sonoma() ||
             workspace_is_macos_sequoia() ||
-            workspace_is_macos_tahoe()) {
+            (workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1327, NULL);
             SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1328, NULL);
         }
@@ -329,15 +335,19 @@ int main(int argc, char **argv)
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 804, NULL);
     }
 
     window_manager_init(&g_window_manager);
+    bool manage;
+    if (read_config_manage_setting(g_config_file, sizeof(g_config_file), &manage)) {
+        g_window_manager.manage = manage;
+    }
     space_manager_begin(&g_space_manager);
     window_manager_begin(&g_space_manager, &g_window_manager);
 
-    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe()) {
+    if (workspace_is_macos_sequoia() || workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         update_window_notifications();
     }
 

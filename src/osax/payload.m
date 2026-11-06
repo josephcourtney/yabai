@@ -238,6 +238,11 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
         NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
         macOSSequoia = true;
         return true; // Tahoe preview
+    } else if (os_version.majorVersion == 27 && os_version.minorVersion == 0) {
+
+        NSLog(@"[yabai-sa] Detected macOS 27.0.x; using tested 27.0 scripting-addition signatures.");
+        macOSSequoia = true;
+        return true; // macOS 27.0.x only
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Big Sur 11.0.0+, Monterey 12.0.0+, Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");
@@ -256,6 +261,11 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
         NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
         macOSSequoia = true;
         return true; // Tahoe preview
+    } else if (os_version.majorVersion == 27 && os_version.minorVersion == 0) {
+
+        NSLog(@"[yabai-sa] Detected macOS 27.0.x; using tested 27.0 scripting-addition signatures.");
+        macOSSequoia = true;
+        return true; // macOS 27.0.x only
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Monterey 12.0.0+, and Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");
@@ -780,14 +790,17 @@ static void do_window_focus(char *message)
 {
     if (set_front_window_fp == 0) return;
 
-    int window_connection;
-    ProcessSerialNumber window_psn;
+    int window_connection = 0;
+    ProcessSerialNumber window_psn = {0};
 
     uint32_t wid;
     unpack(wid);
 
-    SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection);
-    SLSGetConnectionPSN(SLSMainConnectionID(), &window_psn);
+    // A stale window ID must not leave an uninitialized connection or PSN
+    // in the Dock-injected focus callback.
+    if (SLSGetWindowOwner(SLSMainConnectionID(), wid, &window_connection) != kCGErrorSuccess ||
+        window_connection <= 0) return;
+    if (SLSGetConnectionPSN(window_connection, &window_psn) != kCGErrorSuccess) return;
 
     ((focus_window_call) set_front_window_fp)(window_psn, wid);
 }

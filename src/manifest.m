@@ -76,6 +76,7 @@
 #include "space_manager.h"
 #include "window_manager.h"
 #include "mouse_handler.h"
+#include "layout_store.h"
 
 #include "sa.m"
 #include "mission_control.c"
@@ -87,6 +88,7 @@
 #include "display.c"
 #include "space.c"
 #include "view.c"
+#include "bsp_resize_preview.c"
 #include "window.c"
 #include "process_manager.c"
 #include "application.c"
@@ -94,4 +96,5 @@
 #include "space_manager.c"
 #include "window_manager.c"
 #include "mouse_handler.c"
+#include "layout_store.m"
 #include "yabai.c"
