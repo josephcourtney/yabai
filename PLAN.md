@@ -299,3 +299,11 @@ unqualified. PR #8 stays draft; do not infer approval to merge.
   reclamping is staged on the draft live-resize PR. Requires fresh native
   build, a ChatGPT reproduction and cross-app regression checks. Do not
   merge on the basis of source review alone.
+
+
+- **Preview transaction correction (unverified):** After the AX minimum-size
+  preflight, ChatGPT could shrink without moving its left edge because the
+  preview commit was aborted or the final position was not independently
+  verified. Staged a shadow-first, actual-AX-frame snapshot/restore transaction,
+  explicit final size+position writes, and post-commit geometry readback.
+  Requires fresh native build and left-edge minimum-width GUI reproduction.

@@ -447,3 +447,32 @@ TEST_FUNC(bsp_preview_learns_rejected_minimum_from_actual_size,
     TEST_CHECK(learned.width == 650.0f, true);
     TEST_CHECK(learned.height == 450.0f, true);
 });
+
+
+TEST_FUNC(bsp_preview_geometry_requires_position_after_size_preflight,
+{
+    CGRect target = CGRectMake(500, 100, 600, 700);
+    CGRect preflight = CGRectMake(200, 100, 600, 700);
+    // Size has reached the application's minimum, but the left edge has
+    // not moved. This is NOT a committed left-edge BSP resize.
+    TEST_CHECK(bsp_preview_geometry_matches(preflight, target), false);
+    preflight.origin.x = 500;
+    TEST_CHECK(bsp_preview_geometry_matches(preflight, target), true);
+    preflight.size.width = 620;
+    TEST_CHECK(bsp_preview_geometry_matches(preflight, target), false);
+});
+
+TEST_FUNC(bsp_preview_minimum_clamp_preserves_right_edge,
+{
+    // The right child has a 600pt minimum. A left-edge drag proposes a
+    // smaller right tile; clamping must move its left edge right only as
+    // far as the minimum allows, keeping the stationary right edge.
+    struct area parent = { .x = 100, .y = 50, .w = 1000, .h = 700 };
+    float ratio = bsp_clamp_ratio(0.80f, 0.50f, parent.w, 10, 100, 600);
+    struct area left, right;
+    area_make_pair(SPLIT_Y, 10, ratio, &parent, &left, &right);
+    TEST_CHECK(right.w >= 600.0f, true);
+    TEST_CHECK(right.x > 100.0f, true);
+    TEST_CHECK(right.x + right.w == parent.x + parent.w, true);
+    TEST_CHECK(left.x + left.w + 10 == right.x, true);
+});

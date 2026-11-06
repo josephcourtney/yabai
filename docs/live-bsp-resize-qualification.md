@@ -275,3 +275,34 @@ not a guarantee that the first preview outline knows a new application's limit.
 
 The new source and native tests require a fresh macOS build and runtime
 qualification; no PASS is claimed for this patch.
+
+
+## Minimum-width preflight-only shrink regression (post-5e0d422)
+
+The operator reports a second failure: after previewing a narrower-than-minimum
+ChatGPT tile, the real window shrinks to its minimum width but its **left edge
+remains at the original position**. The prior implementation could mutate AX
+size during preflight and then abort the BSP commit, leaving the client at
+its old origin; it also relied on an optimistic cached frame for the final
+flush, which did not independently verify AX position.
+
+The revised commit path:
+1. Captures actual AX frames for every affected window before any write.
+2. Preflights sizes against the shadow BSP, learns observed minimums, clamps
+   ratios and verifies the constrained shadow layout.
+3. Only then copies ratios into the authoritative BSP and explicitly applies
+   **size and position** using the generic size-position-size AX setter.
+4. Reads back both coordinates and dimensions, with bounded retries.
+5. On any failure, restores the previous BSP ratios **and actual AX frames**,
+   rather than leaving a preflight-only shrink.
+
+**Acceptance:** Place ChatGPT on the right side of a split. Drag its left
+edge right until the preview is narrower than ChatGPT's minimum. On release
+the window must be at its minimum width, with its right edge stationary
+and its left edge moved right to match the constrained BSP tile. If the
+commit is rejected, the entire original window frame must be restored.
+Repeat with ChatGPT on the left, top/bottom and nested splits, and the
+rotated display. Record exact geometry and mouse-up latency.
+
+This is an unverified source-only correction; the operator must rebuild and
+run the native tests and GUI acceptance before promotion.

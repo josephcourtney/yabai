@@ -49,7 +49,9 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_preview_abort_clears_resize_gesture_state) \
     TEST_ENTRY(bsp_preview_does_not_claim_live_ax_notification_ownership) \
     TEST_ENTRY(bsp_preview_probe_never_grows_before_position_is_verified) \
-    TEST_ENTRY(bsp_preview_learns_rejected_minimum_from_actual_size)
+    TEST_ENTRY(bsp_preview_learns_rejected_minimum_from_actual_size) \
+    TEST_ENTRY(bsp_preview_geometry_requires_position_after_size_preflight) \
+    TEST_ENTRY(bsp_preview_minimum_clamp_preserves_right_edge)
 
 static struct {
     char *name;

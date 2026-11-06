@@ -266,12 +266,22 @@ bool bsp_resize_preview_adjust(struct view *view, int direction, float dx, float
 // Never move a window to its proposed tile before checking whether it can
 // actually shrink to fit. A preview may initially be optimistic if the app's
 // minimum size is unknown; a size-only preflight learns that minimum on release.
-struct bsp_preview_size_probe {
+struct bsp_preview_window_snapshot {
     struct window *window;
+    CGRect original;
     CGSize requested;
     CGSize observed;
     int stable;
+    bool shrink_requested;
 };
+
+static bool bsp_preview_geometry_matches(CGRect actual, CGRect target)
+{
+    return !AX_DIFF(actual.origin.x, target.origin.x) &&
+           !AX_DIFF(actual.origin.y, target.origin.y) &&
+           !AX_DIFF(actual.size.width, target.size.width) &&
+           !AX_DIFF(actual.size.height, target.size.height);
+}
 
 static CGSize bsp_preview_probe_size(CGSize current, CGSize target)
 {
@@ -290,53 +300,76 @@ static CGSize bsp_preview_learn_minimum(CGSize requested, CGSize observed, CGSiz
     return known;
 }
 
-// Probe only shrinking axes. Growing at the old position could itself extend
-// a window beyond the display. The entire batch shares a bounded observation
-// interval, rather than blocking once per window. No positions are changed.
-static bool bsp_preview_preflight_sizes(struct view *view)
+// Snapshot *actual* AX frames before any preflight resize. The window->frame
+// cache is asynchronous and must not be used as a rollback source.
+static bool bsp_preview_capture_snapshots(struct view *view,
+                                          struct bsp_preview_window_snapshot **out,
+                                          int *out_count)
+{
+    struct window_capture *windows = NULL;
+    window_node_capture_windows(view->root, &windows);
+    int count = ts_buf_len(windows);
+    if (!count) return false;
+
+    struct bsp_preview_window_snapshot *snapshots = calloc(count, sizeof(*snapshots));
+    if (!snapshots) return false;
+
+    for (int i = 0; i < count; ++i) {
+        struct window *window = windows[i].window;
+        CGRect frame = window_ax_frame(window);
+        if (frame.size.width <= 0.0f || frame.size.height <= 0.0f) {
+            free(snapshots);
+            return false;
+        }
+        snapshots[i].window = window;
+        snapshots[i].original = frame;
+    }
+    *out = snapshots;
+    *out_count = count;
+    return true;
+}
+
+// Preflight may change real sizes. Its caller MUST either apply and verify
+// the final geometry, or explicitly restore every original AX frame.
+static bool bsp_preview_preflight_sizes(struct view *shadow,
+                                        struct bsp_preview_window_snapshot *snapshots,
+                                        int count)
 {
     struct window_capture *targets = NULL;
-    window_node_capture_windows(view->root, &targets);
-    int count = ts_buf_len(targets);
-    if (!count) return true;
+    window_node_capture_windows(shadow->root, &targets);
+    if (ts_buf_len(targets) != count) return false;
 
-    struct bsp_preview_size_probe *probes = calloc(count, sizeof(*probes));
-    if (!probes) return false;
-    bool success = true;
     bool has_shrink = false;
     for (int i = 0; i < count; ++i) {
-        struct window *window = targets[i].window;
-        CGRect current = window_ax_frame(window);
-        if (current.size.width <= 0.0f || current.size.height <= 0.0f) {
-            success = false;
-            goto done;
-        }
+        struct bsp_preview_window_snapshot *probe = &snapshots[i];
+        if (targets[i].window != probe->window) return false;
         CGSize target = CGSizeMake(targets[i].w, targets[i].h);
-        CGSize request = bsp_preview_probe_size(current.size, target);
-        probes[i] = (struct bsp_preview_size_probe) {
-            .window = window, .requested = request, .observed = current.size
-        };
-        if (request.width < current.size.width - 1.5f ||
-            request.height < current.size.height - 1.5f) {
+        if (target.width <= 0.0f || target.height <= 0.0f) return false;
+        probe->requested = bsp_preview_probe_size(probe->original.size, target);
+        probe->observed = probe->original.size;
+        probe->shrink_requested =
+            probe->requested.width < probe->original.size.width - 1.5f ||
+            probe->requested.height < probe->original.size.height - 1.5f;
+        if (probe->shrink_requested) {
             has_shrink = true;
-            window_manager_resize_window(window, request.width, request.height);
+            window_manager_resize_window(probe->window, probe->requested.width,
+                                          probe->requested.height);
+        } else {
+            probe->stable = 2;
         }
     }
 
     if (has_shrink) {
-        // AX updates can lag the setter. Require repeated observations before
-        // interpreting a larger-than-requested size as an application limit.
-        // This is bounded to 200ms for the entire view, not per application.
+        // Observe all clients in one bounded interval, not 200ms per window.
+        // Do not mistake an immediate, stale AX readback for a client minimum.
         for (int attempt = 0; attempt < 4; ++attempt) {
             usleep(50000);
             bool all_stable = true;
             for (int i = 0; i < count; ++i) {
-                struct bsp_preview_size_probe *probe = &probes[i];
+                struct bsp_preview_window_snapshot *probe = &snapshots[i];
+                if (!probe->shrink_requested) continue;
                 CGRect frame = window_ax_frame(probe->window);
-                if (frame.size.width <= 0.0f || frame.size.height <= 0.0f) {
-                    success = false;
-                    goto done;
-                }
+                if (frame.size.width <= 0.0f || frame.size.height <= 0.0f) return false;
                 if (fabs(frame.size.width - probe->observed.width) < 1.5f &&
                     fabs(frame.size.height - probe->observed.height) < 1.5f) {
                     probe->stable++;
@@ -346,22 +379,18 @@ static bool bsp_preview_preflight_sizes(struct view *view)
                 probe->observed = frame.size;
                 if (probe->stable < 2) all_stable = false;
             }
-            // At least 150ms must elapse before accepting a stable readback.
             if (attempt >= 2 && all_stable) break;
         }
     }
 
     for (int i = 0; i < count; ++i) {
-        struct bsp_preview_size_probe *probe = &probes[i];
-        if (probe->stable < 2 && has_shrink) {
-            // An AX client that is still resizing has not supplied a usable
-            // minimum. Abort rather than place a potentially oversized window.
-            success = false;
-            goto done;
-        }
+        struct bsp_preview_window_snapshot *probe = &snapshots[i];
+        if (probe->stable < 2) return false;
     }
+
     for (int i = 0; i < count; ++i) {
-        struct bsp_preview_size_probe *probe = &probes[i];
+        struct bsp_preview_window_snapshot *probe = &snapshots[i];
+        if (!probe->shrink_requested) continue;
         CGSize learned = bsp_preview_learn_minimum(probe->requested,
                                                    probe->observed,
                                                    probe->window->live_resize_minimum);
@@ -372,9 +401,88 @@ static bool bsp_preview_preflight_sizes(struct view *view)
             probe->window->live_resize_minimum = learned;
         }
     }
-done:
-    free(probes);
-    return success;
+    return true;
+}
+
+// Explicit AX restoration is required even when the BSP ratios never changed:
+// a failed preflight may already have shrunk a client at its old position.
+// Re-read AX rather than trusting the window->frame cache.
+static bool bsp_preview_restore_snapshots(struct bsp_preview_window_snapshot *snapshots,
+                                          int count)
+{
+    bool restored = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        restored = true;
+        for (int i = 0; i < count; ++i) {
+            struct bsp_preview_window_snapshot *snapshot = &snapshots[i];
+            CGRect actual = window_ax_frame(snapshot->window);
+            if (!bsp_preview_geometry_matches(actual, snapshot->original)) {
+                restored = false;
+                window_manager_set_window_frame(snapshot->window,
+                    snapshot->original.origin.x, snapshot->original.origin.y,
+                    snapshot->original.size.width, snapshot->original.size.height);
+            }
+        }
+        if (restored) break;
+        usleep(50000);
+    }
+    for (int i = 0; i < count; ++i) {
+        struct bsp_preview_window_snapshot *snapshot = &snapshots[i];
+        CGRect actual = window_ax_frame(snapshot->window);
+        snapshot->window->frame = actual;
+        if (!bsp_preview_geometry_matches(actual, snapshot->original)) restored = false;
+    }
+    if (!restored) debug("bsp_resize_preview: AX rollback not fully accepted\n");
+    return restored;
+}
+
+// A successful size preflight is not a successful move. The release must
+// explicitly write and verify *both* size and position. In particular, a
+// left-edge drag must move the left edge right while holding the right edge.
+static bool bsp_preview_apply_frames(struct view *view,
+                                     struct bsp_preview_window_snapshot *snapshots,
+                                     int count)
+{
+    struct window_capture *targets = NULL;
+    window_node_capture_windows(view->root, &targets);
+    if (ts_buf_len(targets) != count) return false;
+
+    for (int i = 0; i < count; ++i) {
+        if (targets[i].window != snapshots[i].window ||
+            targets[i].w <= 0.0f || targets[i].h <= 0.0f) return false;
+    }
+
+    bool applied = false;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        applied = true;
+        for (int i = 0; i < count; ++i) {
+            struct window *window = snapshots[i].window;
+            CGRect target = CGRectMake(targets[i].x, targets[i].y,
+                                       targets[i].w, targets[i].h);
+            CGRect actual = window_ax_frame(window);
+            if (!bsp_preview_geometry_matches(actual, target)) {
+                applied = false;
+                // The generic setter writes size-position-size, and does not
+                // skip the move based on an optimistic live-resize frame cache.
+                if (attempt == 0 || attempt == 2) {
+                    window_manager_set_window_frame(window, target.origin.x,
+                        target.origin.y, target.size.width, target.size.height);
+                }
+            }
+        }
+        if (applied) break;
+        usleep(50000);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        struct window *window = snapshots[i].window;
+        CGRect target = CGRectMake(targets[i].x, targets[i].y,
+                                   targets[i].w, targets[i].h);
+        CGRect actual = window_ax_frame(window);
+        window->frame = actual;
+        if (!bsp_preview_geometry_matches(actual, target)) applied = false;
+    }
+    return applied;
 }
 
 static void bsp_preview_clamp_subtree(struct view *view, struct window_node *node)
@@ -418,27 +526,34 @@ bool bsp_resize_preview_commit(struct view *view)
         (view->flags & (VIEW_ENABLE_GAP | VIEW_ENABLE_PADDING)) == preview->initial_flags &&
         bsp_preview_area_equal(view->root->area, preview->initial_area) &&
         bsp_preview_tree_matches(view->root, preview->baseline)) {
-        bsp_preview_copy_changed_ratios(view->root, preview->shadow.root, preview->baseline);
-        view_update(view);
-        // Size-only preflight: an AX client may refuse to shrink, but still
-        // accept the new position, pushing its right/bottom edge off-screen.
-        // Probe first, learn any effective minimum, then clamp the BSP split.
-        if (bsp_preview_preflight_sizes(view)) {
-            bsp_preview_clamp_subtree(view, view->root);
-            view_update(view);
-            if (bsp_preview_subtree_fits(view, view->root)) {
-                view_flush_direct(view);
-                committed = true;
+        struct bsp_preview_window_snapshot *snapshots = NULL;
+        int count = 0;
+        if (bsp_preview_capture_snapshots(view, &snapshots, &count)) {
+            // Probe the *shadow* layout first. Do not modify authoritative
+            // BSP ratios until the observed minimum sizes can be satisfied.
+            if (bsp_preview_preflight_sizes(&preview->shadow, snapshots, count)) {
+                bsp_preview_clamp_subtree(&preview->shadow, preview->shadow.root);
+                bsp_preview_layout(&preview->shadow, preview->shadow.root);
+                if (bsp_preview_subtree_fits(&preview->shadow, preview->shadow.root)) {
+                    bsp_preview_copy_changed_ratios(view->root, preview->shadow.root,
+                                                    preview->baseline);
+                    view_update(view);
+                    committed = bsp_preview_apply_frames(view, snapshots, count);
+                    if (!committed) {
+                        debug("bsp_resize_preview: AX rejected final position or size; rolling back\n");
+                    }
+                } else {
+                    debug("bsp_resize_preview: no feasible layout for AX minimum; rolling back\n");
+                }
             } else {
-                debug("bsp_resize_preview: no feasible layout for AX minimum; restoring previous split\n");
+                debug("bsp_resize_preview: AX size preflight did not settle; rolling back\n");
             }
-        } else {
-            debug("bsp_resize_preview: AX size preflight did not settle; restoring previous split\n");
-        }
-        if (!committed) {
-            bsp_preview_restore_ratios(view->root, preview->baseline);
-            view_update(view);
-            view_flush_direct(view);
+            if (!committed) {
+                bsp_preview_restore_ratios(view->root, preview->baseline);
+                view_update(view);
+                bsp_preview_restore_snapshots(snapshots, count);
+            }
+            free(snapshots);
         }
     }
     bsp_resize_preview_cancel();
