@@ -61,3 +61,40 @@ TEST_FUNC(mouse_frame_changes_are_classified_by_axis,
     TEST_CHECK(info.changed_size, true);
     TEST_CHECK(info.changed_h, false);
 });
+
+TEST_FUNC(mouse_active_move_targets_only_the_dragged_window,
+{
+    struct window selected = { .id = 701 };
+    struct window other = { .id = 702 };
+    struct mouse_state ms = { .window = &selected, .current_action = MOUSE_MODE_MOVE };
+    TEST_CHECK(mouse_is_active_move(&ms, &selected), true);
+    TEST_CHECK(mouse_is_active_move(&ms, &other), false);
+    TEST_CHECK(mouse_is_active_move(&ms, NULL), false);
+    ms.current_action = MOUSE_MODE_RESIZE;
+    TEST_CHECK(mouse_is_active_move(&ms, &selected), false);
+    ms.current_action = MOUSE_MODE_NONE;
+    TEST_CHECK(mouse_is_active_move(&ms, &selected), false);
+});
+
+TEST_FUNC(mouse_release_with_no_prior_resize_still_uses_gesture_origin,
+{
+    struct mouse_state ms = {
+        .origin_location = { 300, 300 },
+        .down_location = { 325, 325 },
+        .resize_applied = false
+    };
+    TEST_CHECK(mouse_gesture_moved(&ms, CGPointMake(300, 300)), false);
+    TEST_CHECK(mouse_gesture_moved(&ms, CGPointMake(325, 325)), true);
+});
+
+TEST_FUNC(event_coalescing_keeps_mouse_button_boundaries,
+{
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DRAGGED), true);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_MOVED, MOUSE_MOVED), true);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_UP), false);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_DOWN), false);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_MOVED, MOUSE_DRAGGED), false);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_DRAGGED, MOUSE_MOVED), false);
+    TEST_CHECK(event_loop_can_coalesce(MOUSE_UP, MOUSE_UP), false);
+    TEST_CHECK(event_loop_can_coalesce(WINDOW_MOVED, WINDOW_MOVED), false);
+});
