@@ -240,3 +240,38 @@ cover abort-state idempotence and mode isolation.
 
 This patch is not yet compiled or operator-qualified. Repeat C5 interruption
 tests on the new exact SHA before merging.
+
+
+## AX minimum-size / off-screen preview regression (post-81aa597)
+
+The operator observed that ChatGPT's preview tile could be made narrower than
+macOS's ordinary window-resize minimum. On mouse-up the client retained a larger
+size while accepting yabai's proposed position, extending the window off-screen.
+
+The experimental correction performs a **size-only, shrink-only preflight** on
+mouse-up, with bounded, repeated AX readback (up to 200ms for the whole view).
+It learns the observed minimum, clamps BSP ratios recursively (including nested
+subtrees), and only then writes final positions. If observations do not settle,
+or constraints cannot fit, it restores the previous BSP split instead of
+committing an unverified off-screen placement. This is a release-time safeguard,
+not a guarantee that the first preview outline knows a new application's limit.
+
+**Operator acceptance (not yet executed):**
+1. With ChatGPT and another window on a disposable Space, preview a width below
+   ChatGPT's native minimum. The outline may initially be optimistic, but the
+   committed window must remain within its assigned on-screen tile; the neighbor
+   must be resized consistently, without overlap.
+2. Repeat immediately: the learned minimum should now constrain the preview.
+3. Check left- and right-side ChatGPT placement, top/bottom splits, nested BSP
+   trees, gap/padding, and the portrait monitor.
+4. Check applications with responsive AX resizing and applications that refuse
+   AX resizing. An unsettled or infeasible preflight must restore the previous
+   layout, not commit an off-screen window.
+5. Measure the mouse-up latency and any transient overlap. The preflight may
+   wait up to 200ms and may resize window contents before moving them; it does
+   not alter drag-time responsiveness.
+6. Requalify both independent live/classic resize modes, cross-display moves,
+   Zen tab-detach and interruption handling.
+
+The new source and native tests require a fresh macOS build and runtime
+qualification; no PASS is claimed for this patch.

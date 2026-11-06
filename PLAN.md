@@ -290,3 +290,12 @@ before promotion. At `7c2e68c`, the operator recorded 83/83 Python,
 reported working preview across two landscape and one portrait monitor.
 The subsequent lifecycle hardening patch and final regressions remain
 unqualified. PR #8 stays draft; do not infer approval to merge.
+
+
+- **Preview AX minimum-size follow-up (unverified):** A user reproduced a
+  minimum-width mismatch in ChatGPT: optimistic preview width, then actual
+  AX window wider than tile and partly off-screen. A staged, shrink-only
+  mouse-up size preflight with observed-minimum learning and BSP ratio
+  reclamping is staged on the draft live-resize PR. Requires fresh native
+  build, a ChatGPT reproduction and cross-app regression checks. Do not
+  merge on the basis of source review alone.

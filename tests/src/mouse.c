@@ -418,3 +418,32 @@ TEST_FUNC(bsp_preview_does_not_claim_live_ax_notification_ownership,
     TEST_CHECK(mouse_live_resize_controls_view(&candidate), false);
     g_mouse_state = saved;
 });
+
+
+TEST_FUNC(bsp_preview_probe_never_grows_before_position_is_verified,
+{
+    CGSize current = CGSizeMake(640, 500);
+    CGSize target = CGSizeMake(300, 700);
+    CGSize requested = bsp_preview_probe_size(current, target);
+    TEST_CHECK(requested.width == 300.0f, true);
+    TEST_CHECK(requested.height == 500.0f, true);
+    requested = bsp_preview_probe_size(current, CGSizeMake(800, 900));
+    TEST_CHECK(CGSizeEqualToSize(requested, current), true);
+});
+
+TEST_FUNC(bsp_preview_learns_rejected_minimum_from_actual_size,
+{
+    CGSize known = CGSizeZero;
+    CGSize requested = CGSizeMake(300, 400);
+    CGSize observed = CGSizeMake(600, 400);
+    CGSize learned = bsp_preview_learn_minimum(requested, observed, known);
+    TEST_CHECK(learned.width == 600.0f, true);
+    TEST_CHECK(learned.height == 0.0f, true);
+    // A successful shrink does not fabricate a new minimum.
+    learned = bsp_preview_learn_minimum(requested, requested, known);
+    TEST_CHECK(CGSizeEqualToSize(learned, known), true);
+    // Existing minima cannot be lowered by a later observation.
+    learned = bsp_preview_learn_minimum(requested, observed, CGSizeMake(650, 450));
+    TEST_CHECK(learned.width == 650.0f, true);
+    TEST_CHECK(learned.height == 450.0f, true);
+});
