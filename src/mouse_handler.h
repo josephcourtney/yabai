@@ -109,6 +109,7 @@ static char *mouse_mode_str[] =
 
 void mouse_window_info_populate(struct mouse_state *ms, struct mouse_window_info *info);
 bool mouse_gesture_moved(struct mouse_state *ms, CGPoint point);
+bool mouse_is_active_move(struct mouse_state *ms, struct window *window);
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point);
 void mouse_drop_action_stack(struct window_manager *wm, struct view *src_view, struct window *src_window, struct view *dst_view, struct window *dst_window);
 void mouse_drop_action_swap(struct window_manager *wm, struct view *src_view, struct window_node *src_node, struct window *src_window, struct view *dst_view, struct window_node *dst_node, struct window *dst_window);
