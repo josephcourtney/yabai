@@ -115,6 +115,11 @@ bool mouse_gesture_moved(struct mouse_state *ms, CGPoint point)
     return dx >= 3.0f || dy >= 3.0f;
 }
 
+bool mouse_is_active_move(struct mouse_state *ms, struct window *window)
+{
+    return window && ms->current_action == MOUSE_MODE_MOVE && ms->window == window;
+}
+
 enum mouse_drop_action mouse_determine_drop_action(struct mouse_state *ms, struct window_node *src_node, struct window *dst_window, CGPoint point)
 {
     CGRect  f    = dst_window->frame;
