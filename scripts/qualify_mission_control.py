@@ -62,13 +62,20 @@ def resume_installed_service(folder: Path) -> None:
         print("WARNING: installed service restart failed", file=sys.stderr)
 
 
-def snapshot(folder: Path, name: str) -> None:
+def snapshot(folder: Path, name: str, space_indices: tuple[int, int] | None = None) -> None:
     for kind in ("spaces", "windows", "displays"):
         result = run(str(BINARY), "-m", "query", "--" + kind, timeout=15)
         (folder / f"{name}-{kind}.json").write_text(result.stdout)
         if result.returncode:
             raise RuntimeError(f"{name} {kind} query failed: {result.stderr}")
         json.loads(result.stdout)
+    if space_indices:
+        for index in space_indices:
+            result = run(str(BINARY), "-m", "space", str(index), "--dump-layout", timeout=15)
+            (folder / f"{name}-bsp-{index}.json").write_text(result.stdout)
+            if result.returncode:
+                raise RuntimeError(f"{name} BSP dump for Space {index} failed: {result.stderr}")
+            json.loads(result.stdout)
 
 
 def spaces() -> list[dict]:
@@ -138,7 +145,7 @@ def main() -> int:
     parser.add_argument("--allow-layout-mutation", action="store_true",
                         help="Explicitly permit temporary BSP configuration of both Spaces")
     parser.add_argument("--skip-build", action="store_true", help="Use an already stamped binary")
-    parser.add_argument("--settle", type=float, default=2.5, help="Seconds after the manual drag")
+    parser.add_argument("--settle", type=float, default=5.5, help="Seconds after the manual drag")
     args = parser.parse_args()
     if sys.platform != "darwin":
         parser.error("requires macOS")
@@ -197,13 +204,13 @@ def main() -> int:
         for space, index in zip(verified, (args.source, args.destination)):
             if space["id"] != original[index][0] or space["type"] != "bsp":
                 raise RuntimeError(f"Space {index} BSP setup verification failed")
-        snapshot(folder, "before")
+        snapshot(folder, "before", (args.source, args.destination))
         print(f"Verified BSP source {args.source} (ID {source['id']}) and "
               f"destination {args.destination} (ID {destination['id']}).")
         print("\nTest daemon running. Move ONE window between BSP Spaces using Mission Control.")
         input("Press Enter AFTER the transfer is complete (or Ctrl+C to abort): ")
         time.sleep(args.settle)
-        snapshot(folder, "after")
+        snapshot(folder, "after", (args.source, args.destination))
         after_source, after_destination = selected_spaces(args.source, args.destination)
         if any(space["id"] != original[index][0] or space["type"] != "bsp"
                for space, index in zip((after_source, after_destination),
