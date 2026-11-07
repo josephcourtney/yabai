@@ -32,6 +32,36 @@ def require(*args: str, timeout: int = 90) -> str:
     return result.stdout
 
 
+def pause_installed_service(folder: Path) -> bool:
+    result = run("pgrep", "-x", "yabai")
+    if result.returncode == 1:
+        return False
+    if result.returncode:
+        raise RuntimeError("cannot inspect existing yabai daemon")
+    launch = require("launchctl", "list")
+    if "com.koekeishiya.yabai" not in launch:
+        raise RuntimeError("existing yabai daemon is not a recognized launchd service")
+    installed = Path("/opt/homebrew/bin/yabai")
+    if not installed.is_file():
+        raise RuntimeError("installed yabai executable unavailable")
+    require(str(installed), "--stop-service")
+    for _ in range(40):
+        if run("pgrep", "-x", "yabai").returncode == 1:
+            (folder / "service-state.txt").write_text("Service stopped; restart required.\\n")
+            return True
+        time.sleep(0.25)
+    raise RuntimeError("installed service did not stop")
+
+
+def resume_installed_service(folder: Path) -> None:
+    result = run("/opt/homebrew/bin/yabai", "--start-service")
+    (folder / "service-restoration.txt").write_text(
+        f"exit={result.returncode}\\n{result.stdout}{result.stderr}"
+    )
+    if result.returncode:
+        print("WARNING: installed service restart failed", file=sys.stderr)
+
+
 def snapshot(folder: Path, name: str) -> None:
     for kind in ("spaces", "windows", "displays"):
         result = run(str(BINARY), "-m", "query", "--" + kind, timeout=15)
@@ -127,6 +157,7 @@ def main() -> int:
         parser.error(f"output directory already exists: {folder}")
     folder.mkdir(parents=True)
     proc = None
+    resume_service = False
     original: dict[int, tuple[int, str]] = {}
     try:
         (folder / "head.txt").write_text(require("git", "rev-parse", "HEAD"))
@@ -134,6 +165,7 @@ def main() -> int:
             print("Running tests and building qualification binary...", flush=True)
             for cmd in (("just", "test-local"), ("just", "build")):
                 require(*cmd, timeout=900)
+        resume_service = pause_installed_service(folder)
         print("Checking that no yabai daemon is already running...", flush=True)
         (folder / "preflight.log").write_text(
             require("python3", "scripts/qualify_runtime.py", "preflight", timeout=90)
@@ -202,6 +234,8 @@ def main() -> int:
             if proc.poll() is None and original:
                 restore_layouts(original, folder)
             stop_daemon(proc)
+        if resume_service:
+            resume_installed_service(folder)
         if (folder / "daemon.log").exists():
             lines = (folder / "daemon.log").read_text(errors="replace").splitlines()
             (folder / "events.log").write_text(
@@ -213,7 +247,7 @@ def main() -> int:
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(folder, arcname=folder.name)
         print(f"Evidence: {archive}", flush=True)
-        print("Test daemon stopped; no installed service was modified.", flush=True)
+        print("Test daemon stopped; previous service restarted when applicable.", flush=True)
 
 
 if __name__ == "__main__":
