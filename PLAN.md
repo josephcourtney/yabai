@@ -307,3 +307,25 @@ unqualified. PR #8 stays draft; do not infer approval to merge.
   verified. Staged a shadow-first, actual-AX-frame snapshot/restore transaction,
   explicit final size+position writes, and post-commit geometry readback.
   Requires fresh native build and left-edge minimum-width GUI reproduction.
+
+
+### Mission Control BSP Space-transfer reconciliation (2026-11-06; unverified)
+
+Reported after PR #8 was merged to `master` and the primary branch renamed
+to `main`: moving a managed window between BSP Spaces via Mission Control
+can leave a gap in the source Space until a later Space switch.
+
+The initial Mission Control exit reconciliation may run before WindowServer
+publishes the final window-to-Space association. The proposed fix adds three
+bounded event-loop reconciliation passes (150, 450, 1200 ms) after exit,
+validating only currently visible user Spaces and flushing only changed
+layouts. Session generation checks discard stale passes if Mission Control
+reopens. No new periodic timer, installed-service change, or scripting
+addition operation is required. Native tests cover mode selection and
+stale/active retry rejection; full Space-move behavior needs operator GUI
+qualification before merge to `main`.
+
+The earlier preview transaction regression was reported fixed by the
+operator and PR #8 merged as `94212cb`. The historical qualification notes
+above describe the evidence at the time of their writing, not current PR
+status.

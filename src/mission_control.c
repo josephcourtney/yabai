@@ -7,7 +7,13 @@ extern volatile uint64_t __last_cmd_tab_time;
 static CONNECTION_CALLBACK(connection_handler)
 {
     if (type == 1204) {
-        event_loop_post(&g_event_loop, MISSION_CONTROL_ENTER, NULL, 0);
+        debug("MC_TRACE SLS received event=1204\n");
+        // Probe only on modern macOS until the private event is verified.
+        if (!(workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
+              workspace_is_macos_sonoma() || workspace_is_macos_sequoia() ||
+              workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
+            event_loop_post(&g_event_loop, MISSION_CONTROL_ENTER, NULL, 0);
+        }
     } else if (type == 1327) {
         uint64_t sid; memcpy(&sid, data, sizeof(uint64_t));
         event_loop_post(&g_event_loop, SLS_SPACE_CREATED, (void *) (intptr_t) sid , 0);
@@ -58,6 +64,10 @@ static CFStringRef kAXExposeExit             = CFSTR("AXExposeExit");
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static OBSERVER_CALLBACK(mission_control_notification_handler)
 {
+    debug("MC_TRACE AX callback show_all=%d front=%d desktop=%d exit=%d\n",
+          CFEqual(notification, kAXExposeShowAllWindows),
+          CFEqual(notification, kAXExposeShowFrontWindows),
+          CFEqual(notification, kAXExposeShowDesktop), CFEqual(notification, kAXExposeExit));
     if (CFEqual(notification, kAXExposeShowAllWindows)) {
         event_loop_post(&g_event_loop, MISSION_CONTROL_SHOW_ALL_WINDOWS, NULL, 0);
     } else if (CFEqual(notification, kAXExposeShowFrontWindows)) {
@@ -72,22 +82,46 @@ static OBSERVER_CALLBACK(mission_control_notification_handler)
 
 void mission_control_observe(void)
 {
-    if (!g_mission_control_observer.is_observing) {
-        uint32_t pid = workspace_get_dock_pid();
-        g_mission_control_observer.ref = AXUIElementCreateApplication(pid);
-
-        if (pid && g_mission_control_observer.ref) {
-            if (AXObserverCreate(pid, mission_control_notification_handler, &g_mission_control_observer.observer_ref) == kAXErrorSuccess) {
-                AXObserverAddNotification(g_mission_control_observer.observer_ref, g_mission_control_observer.ref, kAXExposeShowAllWindows, NULL);
-                AXObserverAddNotification(g_mission_control_observer.observer_ref, g_mission_control_observer.ref, kAXExposeShowFrontWindows, NULL);
-                AXObserverAddNotification(g_mission_control_observer.observer_ref, g_mission_control_observer.ref, kAXExposeShowDesktop, NULL);
-                AXObserverAddNotification(g_mission_control_observer.observer_ref, g_mission_control_observer.ref, kAXExposeExit, NULL);
-
-                g_mission_control_observer.is_observing = true;
-                CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(g_mission_control_observer.observer_ref), kCFRunLoopDefaultMode);
-            }
-        }
+    if (g_mission_control_observer.is_observing) {
+        debug("MC_TRACE observer already_registered\n");
+        return;
     }
+
+    uint32_t pid = workspace_get_dock_pid();
+    debug("MC_TRACE observer dock_pid=%u\n", pid);
+    if (!pid) return;
+
+    g_mission_control_observer.ref = AXUIElementCreateApplication(pid);
+    if (!g_mission_control_observer.ref) {
+        debug("MC_TRACE observer create_application_failed\n");
+        return;
+    }
+
+    AXError created = AXObserverCreate(pid, mission_control_notification_handler,
+                                       &g_mission_control_observer.observer_ref);
+    debug("MC_TRACE observer create_status=%d\n", created);
+    if (created != kAXErrorSuccess) {
+        CFRelease(g_mission_control_observer.ref);
+        g_mission_control_observer.ref = NULL;
+        return;
+    }
+
+    AXError show_all = AXObserverAddNotification(g_mission_control_observer.observer_ref,
+                                                g_mission_control_observer.ref, kAXExposeShowAllWindows, NULL);
+    AXError front = AXObserverAddNotification(g_mission_control_observer.observer_ref,
+                                             g_mission_control_observer.ref, kAXExposeShowFrontWindows, NULL);
+    AXError desktop = AXObserverAddNotification(g_mission_control_observer.observer_ref,
+                                               g_mission_control_observer.ref, kAXExposeShowDesktop, NULL);
+    AXError exit_status = AXObserverAddNotification(g_mission_control_observer.observer_ref,
+                                                   g_mission_control_observer.ref, kAXExposeExit, NULL);
+    debug("MC_TRACE observer notifications all=%d front=%d desktop=%d exit=%d\n",
+          show_all, front, desktop, exit_status);
+
+    g_mission_control_observer.is_observing = true;
+    CFRunLoopAddSource(CFRunLoopGetMain(),
+                       AXObserverGetRunLoopSource(g_mission_control_observer.observer_ref),
+                       kCFRunLoopDefaultMode);
+    debug("MC_TRACE observer runloop_added\n");
 }
 
 void mission_control_unobserve(void)

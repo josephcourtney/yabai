@@ -2674,8 +2674,17 @@ static void window_manager_validate_windows_on_space(struct window_manager *wm, 
             }
         }
 
+        // WindowServer's per-Space window list may temporarily include a
+        // transferred window after its authoritative Space association has
+        // changed. Do not retain a stale BSP node on that basis alone.
+        struct window *managed_window = window_manager_find_window(wm, view_window_list[i]);
+        if (found && managed_window && !mouse_is_active_move(&g_mouse_state, managed_window)) {
+            uint64_t actual_sid = window_space(managed_window->id);
+            if (actual_sid && actual_sid != view->sid) found = false;
+        }
+
         if (!found) {
-            struct window *window = window_manager_find_window(wm, view_window_list[i]);
+            struct window *window = managed_window;
             if (!window) continue;
 
             // A managed window may appear on a destination display while the
@@ -2836,6 +2845,54 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
                 window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
             } else {
                 space_manager_mark_view_invalid(sm, space_list[j]);
+            }
+        }
+    }
+
+    wm->window_animation_duration = animation_duration;
+
+    // The first pass above refreshes visible layouts and invalidates hidden
+    // ones. Also reconcile actual window ownership on hidden user Spaces
+    // immediately; delayed passes repeat this when WindowServer settles.
+    window_manager_reconcile_visible_spaces_after_mission_control(sm, wm);
+}
+
+// WindowServer can publish Mission Control transfers after the exit event.
+// Reconcile all user Spaces, including hidden source/destination Spaces: on a
+// single display neither side of a transfer is necessarily the active Space.
+// Only changed BSP views are flushed; unchanged views incur no AX writes.
+void window_manager_reconcile_visible_spaces_after_mission_control(struct space_manager *sm, struct window_manager *wm)
+{
+    int display_count;
+    uint32_t *display_list = display_manager_active_display_list(&display_count);
+    if (!display_list) return;
+
+    float animation_duration = wm->window_animation_duration;
+    wm->window_animation_duration = 0.0f;
+
+    for (int i = 0; i < display_count; ++i) {
+        int space_count;
+        uint64_t *space_list = display_space_list(display_list[i], &space_count);
+        if (!space_list) continue;
+
+        for (int j = 0; j < space_count; ++j) {
+            uint64_t sid = space_list[j];
+            if (!space_is_user(sid)) continue;
+
+            // Validate membership even for hidden Spaces. The ordinary helper
+            // deliberately defers their frame writes until activation.
+            window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
+
+            struct view *view = space_manager_find_view(sm, sid);
+            if (view->layout == VIEW_FLOAT) continue;
+
+            // A hidden Space with a changed BSP tree must not retain stale
+            // geometry until the user visits it. This runs only after Mission
+            // Control exits, never while the user is dragging a window.
+            if (view_is_invalid(view)) view_update(view);
+            if (view_is_dirty(view)) {
+                window_node_flush(view->root);
+                view_clear_flag(view, VIEW_IS_DIRTY);
             }
         }
     }

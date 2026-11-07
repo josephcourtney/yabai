@@ -51,7 +51,9 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_preview_probe_never_grows_before_position_is_verified) \
     TEST_ENTRY(bsp_preview_learns_rejected_minimum_from_actual_size) \
     TEST_ENTRY(bsp_preview_geometry_requires_position_after_size_preflight) \
-    TEST_ENTRY(bsp_preview_minimum_clamp_preserves_right_edge)
+    TEST_ENTRY(bsp_preview_minimum_clamp_preserves_right_edge) \
+    TEST_ENTRY(mission_control_reconcile_only_for_space_expose_modes) \
+    TEST_ENTRY(mission_control_reconcile_rejects_stale_and_active_retries)
 
 static struct {
     char *name;

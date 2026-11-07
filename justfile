@@ -128,3 +128,12 @@ stop-installed:
 # Restore the existing launchd service explicitly.
 start-installed:
     /opt/homebrew/bin/yabai --start-service
+
+# Test a sequence of Mission Control Space transfers with one test daemon.
+# The operator performs each drag; setup, assertions and teardown are automatic.
+mc-test source destination trials="1":
+    python3 ./scripts/qualify_mission_control.py --source {{quote(source)}} --destination {{quote(destination)}} --trials {{quote(trials)}} --allow-layout-mutation
+
+# Alternate source/destination direction on every second trial.
+mc-test-reverse source destination trials="2":
+    python3 ./scripts/qualify_mission_control.py --source {{quote(source)}} --destination {{quote(destination)}} --trials {{quote(trials)}} --reverse --allow-layout-mutation

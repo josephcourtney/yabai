@@ -32,6 +32,43 @@ static bool mouse_live_resize_controls_view(struct view *candidate)
     return active && active == candidate && active->layout == VIEW_BSP;
 }
 extern enum mission_control_mode g_mission_control_mode;
+
+// Mission Control can report "exit" before WindowServer finishes moving
+// windows between managed Spaces. Retrying reconciliation on the event-loop
+// thread closes that race without polling or retile work during Mission Control.
+// A new Mission Control session invalidates callbacks from an earlier one.
+static uint32_t g_mission_control_reconcile_generation;
+
+static bool mission_control_mode_needs_space_reconcile(enum mission_control_mode mode)
+{
+    return mode == MISSION_CONTROL_MODE_SHOW ||
+           mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS;
+}
+
+static bool mission_control_reconcile_retry_allowed(uint32_t scheduled_generation,
+                                                    uint32_t current_generation,
+                                                    bool mission_control_active)
+{
+    return scheduled_generation == current_generation && !mission_control_active;
+}
+
+static void mission_control_schedule_space_reconcile(uint32_t generation)
+{
+    // The immediate exit pass may observe stale Space membership. Bound the
+    // follow-up checks to 1.2s, using the normal event loop for all AX work.
+    static const int delays_ms[] = { 150, 450, 1200 };
+    for (int i = 0; i < (int)array_count(delays_ms); ++i) {
+        int delay = delays_ms[i];
+        int pass = i + 1;
+        debug("MC_TRACE schedule generation=%u pass=%d delay_ms=%d\n", generation, pass, delay);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)delay * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            event_loop_post(&g_event_loop, MISSION_CONTROL_RECONCILE,
+                            (void *)(uintptr_t)generation, pass);
+        });
+    }
+}
 extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
@@ -1080,12 +1117,113 @@ static EVENT_HANDLER(WINDOW_TITLE_CHANGED)
     event_signal_push(SIGNAL_WINDOW_TITLE_CHANGED, window);
 }
 
+// A WindowServer order notification is observed for Mission Control transfers
+// even when Dock's AX Expose notifications never arrive. Delay and coalesce
+// membership checks; never retile on receipt of an order notification itself.
+static uint32_t g_space_membership_probe_generation;
+
+static bool space_membership_probe_mismatch(void)
+{
+    bool mismatch = false;
+    table_for (struct window *window, g_window_manager.window, {
+        struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+        if (view && view->layout != VIEW_FLOAT &&
+            !mouse_is_active_move(&g_mouse_state, window)) {
+            uint64_t sid = window_space(window->id);
+            if (sid && sid != view->sid) {
+                debug("MC_TRACE membership_mismatch wid=%u managed=%llu actual=%llu\n",
+                      window->id, (unsigned long long)view->sid, (unsigned long long)sid);
+                mismatch = true;
+            }
+        }
+    })
+    return mismatch;
+}
+
+static bool space_membership_probe_dock_overlay(void)
+{
+    // While Mission Control is visibly open, the Space assignment may be
+    // provisional. Defer all AX writes until the Dock overlay disappears.
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
+    if (!list) return true; // fail closed
+    bool found = false;
+    CFIndex count = CFArrayGetCount(list);
+    for (CFIndex i = 0; i < count; ++i) {
+        CFDictionaryRef info = CFArrayGetValueAtIndex(list, i);
+        CFStringRef owner = CFDictionaryGetValue(info, kCGWindowOwnerName);
+        CFStringRef name = CFDictionaryGetValue(info, kCGWindowName);
+        CFNumberRef layer_ref = CFDictionaryGetValue(info, kCGWindowLayer);
+        int layer = 0;
+        if (!name && owner && layer_ref &&
+            CFNumberGetValue(layer_ref, kCFNumberIntType, &layer) &&
+            layer == 18 && CFEqual(owner, CFSTR("Dock"))) {
+            found = true;
+            break;
+        }
+    }
+    CFRelease(list);
+    return found;
+}
+
+static void space_membership_probe_schedule(void)
+{
+    uint32_t generation = ++g_space_membership_probe_generation;
+    // The first sample is observational; scheduled retries cover settling.
+    // If the overlay is still visible, a capped 500 ms watchdog takes over.
+    static const int delays_ms[] = { 300, 750, 1600, 3000, 5000 };
+    for (int i = 0; i < (int)array_count(delays_ms); ++i) {
+        int pass = i + 1;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)delays_ms[i] * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            event_loop_post(&g_event_loop, SPACE_MEMBERSHIP_PROBE,
+                            (void *)(uintptr_t)generation, pass);
+        });
+    }
+}
+
+static EVENT_HANDLER(SPACE_MEMBERSHIP_PROBE)
+{
+    uint32_t generation = (uint32_t)(uintptr_t)context;
+    if (generation != g_space_membership_probe_generation) return;
+    if (mission_control_is_active() || space_membership_probe_dock_overlay()) {
+        debug("MC_TRACE membership_probe deferred pass=%d\n", param1);
+        // A Mission Control drag may last longer than the original 5-second
+        // sampling window. Keep a single low-frequency probe alive while the
+        // overlay remains visible, but cap the additional observation period.
+        if (param1 >= 5 && param1 < 65) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+                           dispatch_get_main_queue(), ^{
+                event_loop_post(&g_event_loop, SPACE_MEMBERSHIP_PROBE,
+                                (void *)(uintptr_t)generation, param1 + 1);
+            });
+        }
+        return;
+    }
+    if (!space_membership_probe_mismatch()) return;
+    if (param1 == 1) {
+        // The first sample is observational: an order event can precede
+        // mouse-up. Later samples require the moved membership to persist.
+        debug("MC_TRACE membership_probe unsettled generation=%u\n", generation);
+        return;
+    }
+    debug("MC_TRACE membership_probe reconcile generation=%u pass=%d\n",
+          generation, param1);
+    window_manager_reconcile_visible_spaces_after_mission_control(
+        &g_space_manager, &g_window_manager);
+}
+
 static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 {
     uint32_t wid = (uint64_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
     struct window_node *node = table_find(&g_window_manager.insert_feedback, &wid);
     if (node) SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
+    // Only schedule when the ordered window is known to yabai. Every order
+    // does not imply a transfer; the delayed probe checks actual membership.
+    if (window_manager_find_window(&g_window_manager, wid)) {
+        space_membership_probe_schedule();
+    }
 }
 
 static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
@@ -1714,6 +1852,7 @@ out:
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_ALL_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1721,6 +1860,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_ALL_WINDOWS)
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_FRONT_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_FRONT_WINDOWS;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1728,6 +1868,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_FRONT_WINDOWS)
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_DESKTOP)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_DESKTOP;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1735,6 +1876,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_DESKTOP)
 static EVENT_HANDLER(MISSION_CONTROL_ENTER)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -1746,6 +1888,7 @@ static EVENT_HANDLER(MISSION_CONTROL_ENTER)
 
 static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
 {
+    debug("MC_TRACE exit_poll active=%d mode=%d\n", mission_control_is_active(), g_mission_control_mode);
     if (!mission_control_is_active()) return;
 
     CFArrayRef window_list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
@@ -1774,6 +1917,7 @@ static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
         }
     }
 
+    debug("MC_TRACE exit_poll dock_layer18=%d window_count=%d\n", found, window_count);
     if (found) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             event_loop_post(&g_event_loop, MISSION_CONTROL_CHECK_FOR_EXIT, NULL, 0);
@@ -1791,17 +1935,47 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 {
     debug("%s:\n", __FUNCTION__);
 
+    // Dock can emit both an AX exit notification and a fallback poll result.
+    // Do not let a duplicate exit cancel the follow-up checks.
+    if (!mission_control_is_active()) {
+        debug("MC_TRACE exit ignored inactive mode=%d\n", g_mission_control_mode);
+        return;
+    }
+    uint32_t generation = ++g_mission_control_reconcile_generation;
+    debug("MC_TRACE exit generation=%u mode=%d\n", generation, g_mission_control_mode);
+
     if (g_window_manager.menubar_opacity != 1.0f) {
         float alpha = space_is_fullscreen(g_space_manager.current_space_id) ? 1.0f : g_window_manager.menubar_opacity;
         SLSSetMenuBarInsetAndAlpha(g_connection, 0, 1, alpha);
     }
 
-    if (g_mission_control_mode == MISSION_CONTROL_MODE_SHOW || g_mission_control_mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS) {
+    bool reconcile_spaces = mission_control_mode_needs_space_reconcile(g_mission_control_mode);
+    debug("MC_TRACE exit reconcile_spaces=%d\n", reconcile_spaces);
+    if (reconcile_spaces) {
         window_manager_correct_for_mission_control_changes(&g_space_manager, &g_window_manager);
     }
 
     event_signal_push(SIGNAL_MISSION_CONTROL_EXIT, (void*)(uintptr_t)g_mission_control_mode);
     g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+
+    if (reconcile_spaces) {
+        mission_control_schedule_space_reconcile(generation);
+    }
+}
+
+static EVENT_HANDLER(MISSION_CONTROL_RECONCILE)
+{
+    uint32_t generation = (uint32_t)(uintptr_t)context;
+    bool active = mission_control_is_active();
+    bool allowed = mission_control_reconcile_retry_allowed(
+        generation, g_mission_control_reconcile_generation, active);
+    debug("MC_TRACE callback generation=%u current=%u pass=%d active=%d allowed=%d\n",
+          generation, g_mission_control_reconcile_generation, param1, active, allowed);
+    if (!allowed) return;
+
+    debug("%s: post-exit pass %d\n", __FUNCTION__, param1);
+    window_manager_reconcile_visible_spaces_after_mission_control(
+        &g_space_manager, &g_window_manager);
 }
 
 static EVENT_HANDLER(DOCK_DID_RESTART)
