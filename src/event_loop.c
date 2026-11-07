@@ -1168,7 +1168,8 @@ static bool space_membership_probe_dock_overlay(void)
 static void space_membership_probe_schedule(void)
 {
     uint32_t generation = ++g_space_membership_probe_generation;
-    // The first sample is observational; scheduled retries cover settling.\n    // If the overlay is still visible, a capped 500 ms watchdog takes over.
+    // The first sample is observational; scheduled retries cover settling.
+    // If the overlay is still visible, a capped 500 ms watchdog takes over.
     static const int delays_ms[] = { 300, 750, 1600, 3000, 5000 };
     for (int i = 0; i < (int)array_count(delays_ms); ++i) {
         int pass = i + 1;
