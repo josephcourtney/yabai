@@ -342,7 +342,7 @@ int main(int argc, char **argv)
         workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
         CGError mc_registration = SLSRegisterConnectionNotifyProc(
             g_connection, connection_handler, 1204, NULL);
-        debug("MC_TRACE SLS register legacy_enter_1204 status=%d\\n", mc_registration);
+        debug("MC_TRACE SLS register legacy_enter_1204 status=%d\n", mc_registration);
     }
 
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
