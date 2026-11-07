@@ -2674,8 +2674,17 @@ static void window_manager_validate_windows_on_space(struct window_manager *wm, 
             }
         }
 
+        // WindowServer's per-Space window list may temporarily include a
+        // transferred window after its authoritative Space association has
+        // changed. Do not retain a stale BSP node on that basis alone.
+        struct window *managed_window = window_manager_find_window(wm, view_window_list[i]);
+        if (found && managed_window && !mouse_is_active_move(&g_mouse_state, managed_window)) {
+            uint64_t actual_sid = window_space(managed_window->id);
+            if (actual_sid && actual_sid != view->sid) found = false;
+        }
+
         if (!found) {
-            struct window *window = window_manager_find_window(wm, view_window_list[i]);
+            struct window *window = managed_window;
             if (!window) continue;
 
             // A managed window may appear on a destination display while the
@@ -2841,6 +2850,11 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
     }
 
     wm->window_animation_duration = animation_duration;
+
+    // The first pass above refreshes visible layouts and invalidates hidden
+    // ones. Also reconcile actual window ownership on hidden user Spaces
+    // immediately; delayed passes repeat this when WindowServer settles.
+    window_manager_reconcile_visible_spaces_after_mission_control(sm, wm);
 }
 
 // WindowServer can publish Mission Control transfers after the exit event.
