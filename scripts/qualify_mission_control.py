@@ -222,7 +222,7 @@ def main() -> int:
                 raise RuntimeError("Space identities changed between trials")
             prefix = f"trial-{trial:02d}"
             snapshot(folder, prefix + "-before", (src_idx, dst_idx))
-            print(f"\\nTrial {trial}/{args.trials}: Mission Control drag ONE window "
+            print(f"\nTrial {trial}/{args.trials}: Mission Control drag ONE window "
                   f"from Space {src_idx} to Space {dst_idx}.")
             input("Press Enter AFTER the transfer is complete (or Ctrl+C to abort): ")
             time.sleep(args.settle)
@@ -242,14 +242,14 @@ def main() -> int:
                 (folder / f"{prefix}-result.json").write_text(json.dumps({
                     "result": "FAIL", "reason": str(exc),
                     "source_index": src_idx, "destination_index": dst_idx,
-                }, indent=2) + "\\n")
+                }, indent=2) + "\n")
                 raise RuntimeError(f"{prefix}: {exc}") from exc
             trial_results.append(result)
-            (folder / f"{prefix}-result.json").write_text(json.dumps(result, indent=2) + "\\n")
+            (folder / f"{prefix}-result.json").write_text(json.dumps(result, indent=2) + "\n")
             print(f"PASS {prefix}: window {result['moved_window_id']} transferred; "
                   "BSP membership, leaf counts and non-overlap verified.", flush=True)
         (folder / "result.txt").write_text(
-            f"PASS {len(trial_results)}/{args.trials} BSP transfer trials.\\n"
+            f"PASS {len(trial_results)}/{args.trials} BSP transfer trials.\n"
         )
         return 0
     except (KeyboardInterrupt, EOFError):
