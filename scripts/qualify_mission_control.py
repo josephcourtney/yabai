@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 from pathlib import Path
 import signal
 import subprocess
@@ -42,6 +41,50 @@ def snapshot(folder: Path, name: str) -> None:
         json.loads(result.stdout)
 
 
+def spaces() -> list[dict]:
+    data = json.loads(require(str(BINARY), "-m", "query", "--spaces", timeout=15))
+    if not isinstance(data, list):
+        raise RuntimeError("unexpected Space query response")
+    return data
+
+
+def selected_spaces(source: int, destination: int) -> tuple[dict, dict]:
+    entries = {space["index"]: space for space in spaces()}
+    if source not in entries or destination not in entries:
+        raise RuntimeError("selected Space index is missing")
+    selected = entries[source], entries[destination]
+    for space in selected:
+        if space.get("is-native-fullscreen") or space.get("type") == "fullscreen":
+            raise RuntimeError("refusing to modify fullscreen Space")
+        if space.get("layout") not in ("float", "bsp"):
+            raise RuntimeError(f"unsupported original layout: {space.get('layout')}")
+    return selected
+
+
+def set_layout(index: int, layout: str) -> None:
+    require(str(BINARY), "-m", "space", str(index), "--layout", layout, timeout=15)
+
+
+def restore_layouts(original: dict[int, tuple[int, str]], folder: Path) -> None:
+    errors = []
+    for index, (sid, layout) in original.items():
+        try:
+            current = selected_spaces(index, index)[0]
+            if current["id"] != sid:
+                raise RuntimeError(f"Space {index} ID changed from {sid} to {current['id']}")
+            if current["layout"] != layout:
+                set_layout(index, layout)
+            if selected_spaces(index, index)[0]["layout"] != layout:
+                raise RuntimeError(f"Space {index} restoration not verified")
+        except Exception as exc:
+            errors.append(str(exc))
+    (folder / "restoration.txt").write_text(
+        "RESTORED original layouts\n" if not errors else "RESTORATION FAILED:\n" + "\n".join(errors) + "\n"
+    )
+    if errors:
+        print("WARNING: layout restoration failed; see restoration.txt", file=sys.stderr)
+
+
 def stop_daemon(proc: subprocess.Popen[bytes]) -> None:
     if proc.poll() is not None:
         return
@@ -60,6 +103,10 @@ def stop_daemon(proc: subprocess.Popen[bytes]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, help="Output directory; default is timestamped /tmp directory")
+    parser.add_argument("--source", type=int, required=True, help="Source Space index")
+    parser.add_argument("--destination", type=int, required=True, help="Destination Space index")
+    parser.add_argument("--allow-layout-mutation", action="store_true",
+                        help="Explicitly permit temporary BSP configuration of both Spaces")
     parser.add_argument("--skip-build", action="store_true", help="Use an already stamped binary")
     parser.add_argument("--settle", type=float, default=2.5, help="Seconds after the manual drag")
     args = parser.parse_args()
@@ -67,6 +114,10 @@ def main() -> int:
         parser.error("requires macOS")
     if not sys.stdin.isatty():
         parser.error("interactive terminal required for the Mission Control drag")
+    if args.source == args.destination or min(args.source, args.destination) < 1:
+        parser.error("source and destination must be distinct positive Space indices")
+    if not args.allow_layout_mutation:
+        parser.error("explicit --allow-layout-mutation is required")
     if args.settle < 1.2:
         parser.error("--settle must be at least 1.2 seconds")
 
@@ -76,6 +127,7 @@ def main() -> int:
         parser.error(f"output directory already exists: {folder}")
     folder.mkdir(parents=True)
     proc = None
+    original: dict[int, tuple[int, str]] = {}
     try:
         (folder / "head.txt").write_text(require("git", "rev-parse", "HEAD"))
         if not args.skip_build:
@@ -100,12 +152,42 @@ def main() -> int:
         (folder / "running.log").write_text(
             require("python3", "scripts/qualify_runtime.py", "running", timeout=90)
         )
+        source, destination = selected_spaces(args.source, args.destination)
+        original = {
+            args.source: (source["id"], source["layout"]),
+            args.destination: (destination["id"], destination["layout"]),
+        }
+        (folder / "original-layouts.json").write_text(json.dumps(original, indent=2))
+        print("Temporarily configuring selected Spaces as BSP...", flush=True)
+        for index in original:
+            set_layout(index, "bsp")
+        verified = selected_spaces(args.source, args.destination)
+        for space, index in zip(verified, (args.source, args.destination)):
+            if space["id"] != original[index][0] or space["layout"] != "bsp":
+                raise RuntimeError(f"Space {index} BSP setup verification failed")
         snapshot(folder, "before")
+        print(f"Verified BSP source {args.source} (ID {source['id']}) and "
+              f"destination {args.destination} (ID {destination['id']}).")
         print("\nTest daemon running. Move ONE window between BSP Spaces using Mission Control.")
         input("Press Enter AFTER the transfer is complete (or Ctrl+C to abort): ")
         time.sleep(args.settle)
         snapshot(folder, "after")
-        (folder / "result.txt").write_text("Manual transfer reported complete; snapshots captured.\n")
+        after_source, after_destination = selected_spaces(args.source, args.destination)
+        if any(space["id"] != original[index][0] or space["layout"] != "bsp"
+               for space, index in zip((after_source, after_destination),
+                                       (args.source, args.destination))):
+            raise RuntimeError("Space identities/layouts changed during transfer")
+        before_source = json.loads((folder / "before-spaces.json").read_text())
+        before_destination = next(x for x in before_source if x["id"] == original[args.destination][0])
+        before_source = next(x for x in before_source if x["id"] == original[args.source][0])
+        moved = (set(before_source["windows"]) - set(after_source["windows"])) & (
+            set(after_destination["windows"]) - set(before_destination["windows"])
+        )
+        if not moved:
+            raise RuntimeError("no source-to-destination window transfer confirmed")
+        (folder / "result.txt").write_text(
+            f"CONFIRMED BSP transfer; moved window IDs: {sorted(moved)}\\n"
+        )
         print("Captured post-transfer state.", flush=True)
         return 0
     except (KeyboardInterrupt, EOFError):
@@ -117,6 +199,8 @@ def main() -> int:
         return 1
     finally:
         if proc is not None:
+            if proc.poll() is None and original:
+                restore_layouts(original, folder)
             stop_daemon(proc)
         if (folder / "daemon.log").exists():
             lines = (folder / "daemon.log").read_text(errors="replace").splitlines()
