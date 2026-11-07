@@ -1168,7 +1168,7 @@ static bool space_membership_probe_dock_overlay(void)
 static void space_membership_probe_schedule(void)
 {
     uint32_t generation = ++g_space_membership_probe_generation;
-    // The early sample is observational; bounded later retries accommodate\n    // long Mission Control drags and delayed WindowServer publication.
+    // The first sample is observational; scheduled retries cover settling.\n    // If the overlay is still visible, a capped 500 ms watchdog takes over.
     static const int delays_ms[] = { 300, 750, 1600, 3000, 5000 };
     for (int i = 0; i < (int)array_count(delays_ms); ++i) {
         int pass = i + 1;
@@ -1187,6 +1187,16 @@ static EVENT_HANDLER(SPACE_MEMBERSHIP_PROBE)
     if (generation != g_space_membership_probe_generation) return;
     if (mission_control_is_active() || space_membership_probe_dock_overlay()) {
         debug("MC_TRACE membership_probe deferred pass=%d\n", param1);
+        // A Mission Control drag may last longer than the original 5-second
+        // sampling window. Keep a single low-frequency probe alive while the
+        // overlay remains visible, but cap the additional observation period.
+        if (param1 >= 5 && param1 < 65) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
+                           dispatch_get_main_queue(), ^{
+                event_loop_post(&g_event_loop, SPACE_MEMBERSHIP_PROBE,
+                                (void *)(uintptr_t)generation, param1 + 1);
+            });
+        }
         return;
     }
     if (!space_membership_probe_mismatch()) return;
