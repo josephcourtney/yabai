@@ -332,6 +332,19 @@ int main(int argc, char **argv)
         SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1204, NULL);
     }
 
+    // Modern macOS normally uses Dock AX for Mission Control. Probe the
+    // legacy WindowServer event as a diagnostic fallback: newer Dock builds
+    // may no longer deliver the AX Expose notifications to external clients.
+    // The connection callback logs 1204 but does not enter Mission Control
+    // on these OS versions until its meaning is confirmed by qualification.
+    if (workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
+        workspace_is_macos_sonoma() || workspace_is_macos_sequoia() ||
+        workspace_is_macos_tahoe() || workspace_is_macos_goldengate()) {
+        CGError mc_registration = SLSRegisterConnectionNotifyProc(
+            g_connection, connection_handler, 1204, NULL);
+        debug("MC_TRACE SLS register legacy_enter_1204 status=%d\\n", mc_registration);
+    }
+
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 808, NULL);
     SLSRegisterConnectionNotifyProc(g_connection, connection_handler, 1202, NULL);
 
