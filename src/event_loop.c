@@ -1131,7 +1131,7 @@ static bool space_membership_probe_mismatch(void)
             !mouse_is_active_move(&g_mouse_state, window)) {
             uint64_t sid = window_space(window->id);
             if (sid && sid != view->sid) {
-                debug("MC_TRACE membership_mismatch wid=%u managed=%llu actual=%llu\\n",
+                debug("MC_TRACE membership_mismatch wid=%u managed=%llu actual=%llu\n",
                       window->id, (unsigned long long)view->sid, (unsigned long long)sid);
                 mismatch = true;
             }
@@ -1186,17 +1186,17 @@ static EVENT_HANDLER(SPACE_MEMBERSHIP_PROBE)
     uint32_t generation = (uint32_t)(uintptr_t)context;
     if (generation != g_space_membership_probe_generation) return;
     if (mission_control_is_active() || space_membership_probe_dock_overlay()) {
-        debug("MC_TRACE membership_probe deferred pass=%d\\n", param1);
+        debug("MC_TRACE membership_probe deferred pass=%d\n", param1);
         return;
     }
     if (!space_membership_probe_mismatch()) return;
     if (param1 == 1) {
         // The first sample is observational: an order event can precede
         // mouse-up. Later samples require the moved membership to persist.
-        debug("MC_TRACE membership_probe unsettled generation=%u\\n", generation);
+        debug("MC_TRACE membership_probe unsettled generation=%u\n", generation);
         return;
     }
-    debug("MC_TRACE membership_probe reconcile generation=%u pass=%d\\n",
+    debug("MC_TRACE membership_probe reconcile generation=%u pass=%d\n",
           generation, param1);
     window_manager_reconcile_visible_spaces_after_mission_control(
         &g_space_manager, &g_window_manager);
