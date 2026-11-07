@@ -83,23 +83,23 @@ static OBSERVER_CALLBACK(mission_control_notification_handler)
 void mission_control_observe(void)
 {
     if (g_mission_control_observer.is_observing) {
-        debug("MC_TRACE observer already_registered\\n");
+        debug("MC_TRACE observer already_registered\n");
         return;
     }
 
     uint32_t pid = workspace_get_dock_pid();
-    debug("MC_TRACE observer dock_pid=%u\\n", pid);
+    debug("MC_TRACE observer dock_pid=%u\n", pid);
     if (!pid) return;
 
     g_mission_control_observer.ref = AXUIElementCreateApplication(pid);
     if (!g_mission_control_observer.ref) {
-        debug("MC_TRACE observer create_application_failed\\n");
+        debug("MC_TRACE observer create_application_failed\n");
         return;
     }
 
     AXError created = AXObserverCreate(pid, mission_control_notification_handler,
                                        &g_mission_control_observer.observer_ref);
-    debug("MC_TRACE observer create_status=%d\\n", created);
+    debug("MC_TRACE observer create_status=%d\n", created);
     if (created != kAXErrorSuccess) {
         CFRelease(g_mission_control_observer.ref);
         g_mission_control_observer.ref = NULL;
@@ -114,14 +114,14 @@ void mission_control_observe(void)
                                                g_mission_control_observer.ref, kAXExposeShowDesktop, NULL);
     AXError exit_status = AXObserverAddNotification(g_mission_control_observer.observer_ref,
                                                    g_mission_control_observer.ref, kAXExposeExit, NULL);
-    debug("MC_TRACE observer notifications all=%d front=%d desktop=%d exit=%d\\n",
+    debug("MC_TRACE observer notifications all=%d front=%d desktop=%d exit=%d\n",
           show_all, front, desktop, exit_status);
 
     g_mission_control_observer.is_observing = true;
     CFRunLoopAddSource(CFRunLoopGetMain(),
                        AXObserverGetRunLoopSource(g_mission_control_observer.observer_ref),
                        kCFRunLoopDefaultMode);
-    debug("MC_TRACE observer runloop_added\\n");
+    debug("MC_TRACE observer runloop_added\n");
 }
 
 void mission_control_unobserve(void)
