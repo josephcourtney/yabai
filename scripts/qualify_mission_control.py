@@ -2,7 +2,7 @@
 """One-command, fail-closed Mission Control diagnostic session.
 
 The Mission Control drag itself remains manual; all other stages are automated.
-Never stops an existing yabai daemon or changes the user's launchd services.
+Temporarily pauses a recognized Homebrew service and restores it on teardown.
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def selected_spaces(source: int, destination: int) -> tuple[dict, dict]:
         if space.get("is-native-fullscreen") or space.get("type") == "fullscreen":
             raise RuntimeError("refusing to modify fullscreen Space")
         if space.get("type") not in ("float", "bsp"):
-            raise RuntimeError(f"unsupported original layout: {space.get('layout')}")
+            raise RuntimeError(f"unsupported original layout: {space.get('type')}")
     return selected
 
 
@@ -104,7 +104,7 @@ def restore_layouts(original: dict[int, tuple[int, str]], folder: Path) -> None:
                 raise RuntimeError(f"Space {index} ID changed from {sid} to {current['id']}")
             if current["type"] != layout:
                 set_layout(index, layout)
-            if selected_spaces(index, index)[0]["layout"] != layout:
+            if selected_spaces(index, index)[0]["type"] != layout:
                 raise RuntimeError(f"Space {index} restoration not verified")
         except Exception as exc:
             errors.append(str(exc))
