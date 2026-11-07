@@ -86,7 +86,7 @@ def selected_spaces(source: int, destination: int) -> tuple[dict, dict]:
     for space in selected:
         if space.get("is-native-fullscreen") or space.get("type") == "fullscreen":
             raise RuntimeError("refusing to modify fullscreen Space")
-        if space.get("layout") not in ("float", "bsp"):
+        if space.get("type") not in ("float", "bsp"):
             raise RuntimeError(f"unsupported original layout: {space.get('layout')}")
     return selected
 
@@ -102,7 +102,7 @@ def restore_layouts(original: dict[int, tuple[int, str]], folder: Path) -> None:
             current = selected_spaces(index, index)[0]
             if current["id"] != sid:
                 raise RuntimeError(f"Space {index} ID changed from {sid} to {current['id']}")
-            if current["layout"] != layout:
+            if current["type"] != layout:
                 set_layout(index, layout)
             if selected_spaces(index, index)[0]["layout"] != layout:
                 raise RuntimeError(f"Space {index} restoration not verified")
@@ -186,8 +186,8 @@ def main() -> int:
         )
         source, destination = selected_spaces(args.source, args.destination)
         original = {
-            args.source: (source["id"], source["layout"]),
-            args.destination: (destination["id"], destination["layout"]),
+            args.source: (source["id"], source["type"]),
+            args.destination: (destination["id"], destination["type"]),
         }
         (folder / "original-layouts.json").write_text(json.dumps(original, indent=2))
         print("Temporarily configuring selected Spaces as BSP...", flush=True)
@@ -195,7 +195,7 @@ def main() -> int:
             set_layout(index, "bsp")
         verified = selected_spaces(args.source, args.destination)
         for space, index in zip(verified, (args.source, args.destination)):
-            if space["id"] != original[index][0] or space["layout"] != "bsp":
+            if space["id"] != original[index][0] or space["type"] != "bsp":
                 raise RuntimeError(f"Space {index} BSP setup verification failed")
         snapshot(folder, "before")
         print(f"Verified BSP source {args.source} (ID {source['id']}) and "
@@ -205,7 +205,7 @@ def main() -> int:
         time.sleep(args.settle)
         snapshot(folder, "after")
         after_source, after_destination = selected_spaces(args.source, args.destination)
-        if any(space["id"] != original[index][0] or space["layout"] != "bsp"
+        if any(space["id"] != original[index][0] or space["type"] != "bsp"
                for space, index in zip((after_source, after_destination),
                                        (args.source, args.destination))):
             raise RuntimeError("Space identities/layouts changed during transfer")
@@ -218,7 +218,7 @@ def main() -> int:
         if not moved:
             raise RuntimeError("no source-to-destination window transfer confirmed")
         (folder / "result.txt").write_text(
-            f"CONFIRMED BSP transfer; moved window IDs: {sorted(moved)}\\n"
+            f"CONFIRMED BSP transfer; moved window IDs: {sorted(moved)}\n"
         )
         print("Captured post-transfer state.", flush=True)
         return 0
