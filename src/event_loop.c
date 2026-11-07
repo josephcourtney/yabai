@@ -1168,8 +1168,8 @@ static bool space_membership_probe_dock_overlay(void)
 static void space_membership_probe_schedule(void)
 {
     uint32_t generation = ++g_space_membership_probe_generation;
-    // Two settling samples plus a final retry for delayed WindowServer updates.
-    static const int delays_ms[] = { 300, 750, 1600 };
+    // The early sample is observational; bounded later retries accommodate\n    // long Mission Control drags and delayed WindowServer publication.
+    static const int delays_ms[] = { 300, 750, 1600, 3000, 5000 };
     for (int i = 0; i < (int)array_count(delays_ms); ++i) {
         int pass = i + 1;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
