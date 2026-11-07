@@ -7,8 +7,13 @@ extern volatile uint64_t __last_cmd_tab_time;
 static CONNECTION_CALLBACK(connection_handler)
 {
     if (type == 1204) {
-        debug("MC_TRACE connection enter type=%d\n", type);
-        event_loop_post(&g_event_loop, MISSION_CONTROL_ENTER, NULL, 0);
+        debug("MC_TRACE SLS received event=1204\n");
+        // Probe only on modern macOS until the private event is verified.
+        if (!(workspace_is_macos_monterey() || workspace_is_macos_ventura() ||
+              workspace_is_macos_sonoma() || workspace_is_macos_sequoia() ||
+              workspace_is_macos_tahoe() || workspace_is_macos_goldengate())) {
+            event_loop_post(&g_event_loop, MISSION_CONTROL_ENTER, NULL, 0);
+        }
     } else if (type == 1327) {
         uint64_t sid; memcpy(&sid, data, sizeof(uint64_t));
         event_loop_post(&g_event_loop, SLS_SPACE_CREATED, (void *) (intptr_t) sid , 0);
