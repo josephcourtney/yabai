@@ -2843,6 +2843,29 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
     wm->window_animation_duration = animation_duration;
 }
 
+// Late WindowServer Space-association updates can arrive after the initial
+// Mission Control exit pass. Recheck *only visible user Spaces*, and only
+// flush views whose membership or geometry actually changed. Unlike the
+// initial pass, do not invalidate every view and force redundant AX writes.
+void window_manager_reconcile_visible_spaces_after_mission_control(struct space_manager *sm, struct window_manager *wm)
+{
+    int display_count;
+    uint32_t *display_list = display_manager_active_display_list(&display_count);
+    if (!display_list) return;
+
+    float animation_duration = wm->window_animation_duration;
+    wm->window_animation_duration = 0.0f;
+
+    for (int i = 0; i < display_count; ++i) {
+        uint64_t sid = display_space_id(display_list[i]);
+        if (sid && space_is_user(sid)) {
+            window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
+        }
+    }
+
+    wm->window_animation_duration = animation_duration;
+}
+
 void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did)
 {
     int space_count;

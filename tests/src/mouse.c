@@ -476,3 +476,21 @@ TEST_FUNC(bsp_preview_minimum_clamp_preserves_right_edge,
     TEST_CHECK(right.x + right.w == parent.x + parent.w, true);
     TEST_CHECK(left.x + left.w + 10 == right.x, true);
 });
+
+TEST_FUNC(mission_control_reconcile_only_for_space_expose_modes,
+{
+    TEST_CHECK(mission_control_mode_needs_space_reconcile(MISSION_CONTROL_MODE_SHOW), true);
+    TEST_CHECK(mission_control_mode_needs_space_reconcile(MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS), true);
+    TEST_CHECK(mission_control_mode_needs_space_reconcile(MISSION_CONTROL_MODE_SHOW_FRONT_WINDOWS), false);
+    TEST_CHECK(mission_control_mode_needs_space_reconcile(MISSION_CONTROL_MODE_SHOW_DESKTOP), false);
+    TEST_CHECK(mission_control_mode_needs_space_reconcile(MISSION_CONTROL_MODE_INACTIVE), false);
+});
+
+TEST_FUNC(mission_control_reconcile_rejects_stale_and_active_retries,
+{
+    // Exit-time follow-ups are valid only for their own completed session.
+    TEST_CHECK(mission_control_reconcile_retry_allowed(5, 5, false), true);
+    TEST_CHECK(mission_control_reconcile_retry_allowed(4, 5, false), false);
+    TEST_CHECK(mission_control_reconcile_retry_allowed(5, 5, true), false);
+    TEST_CHECK(mission_control_reconcile_retry_allowed(6, 5, false), false);
+});

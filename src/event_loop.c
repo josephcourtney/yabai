@@ -32,6 +32,42 @@ static bool mouse_live_resize_controls_view(struct view *candidate)
     return active && active == candidate && active->layout == VIEW_BSP;
 }
 extern enum mission_control_mode g_mission_control_mode;
+
+// Mission Control can report "exit" before WindowServer finishes moving
+// windows between managed Spaces. Retrying reconciliation on the event-loop
+// thread closes that race without polling or retile work during Mission Control.
+// A new Mission Control session invalidates callbacks from an earlier one.
+static uint32_t g_mission_control_reconcile_generation;
+
+static bool mission_control_mode_needs_space_reconcile(enum mission_control_mode mode)
+{
+    return mode == MISSION_CONTROL_MODE_SHOW ||
+           mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS;
+}
+
+static bool mission_control_reconcile_retry_allowed(uint32_t scheduled_generation,
+                                                    uint32_t current_generation,
+                                                    bool mission_control_active)
+{
+    return scheduled_generation == current_generation && !mission_control_active;
+}
+
+static void mission_control_schedule_space_reconcile(uint32_t generation)
+{
+    // The immediate exit pass may observe stale Space membership. Bound the
+    // follow-up checks to 1.2s, using the normal event loop for all AX work.
+    static const int delays_ms[] = { 150, 450, 1200 };
+    for (int i = 0; i < (int)array_count(delays_ms); ++i) {
+        int delay = delays_ms[i];
+        int pass = i + 1;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)delay * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            event_loop_post(&g_event_loop, MISSION_CONTROL_RECONCILE,
+                            (void *)(uintptr_t)generation, pass);
+        });
+    }
+}
 extern int g_connection;
 extern void *g_workspace_context;
 extern int g_layer_below_window_level;
@@ -1714,6 +1750,7 @@ out:
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_ALL_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1721,6 +1758,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_ALL_WINDOWS)
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_FRONT_WINDOWS)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_FRONT_WINDOWS;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1728,6 +1766,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_FRONT_WINDOWS)
 static EVENT_HANDLER(MISSION_CONTROL_SHOW_DESKTOP)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW_DESKTOP;
     event_signal_push(SIGNAL_MISSION_CONTROL_ENTER, (void*)(uintptr_t)g_mission_control_mode);
 }
@@ -1735,6 +1774,7 @@ static EVENT_HANDLER(MISSION_CONTROL_SHOW_DESKTOP)
 static EVENT_HANDLER(MISSION_CONTROL_ENTER)
 {
     debug("%s:\n", __FUNCTION__);
+    ++g_mission_control_reconcile_generation;
     g_mission_control_mode = MISSION_CONTROL_MODE_SHOW;
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -1791,17 +1831,38 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 {
     debug("%s:\n", __FUNCTION__);
 
+    // Dock can emit both an AX exit notification and a fallback poll result.
+    // Do not let a duplicate exit cancel the follow-up checks.
+    if (!mission_control_is_active()) return;
+    uint32_t generation = ++g_mission_control_reconcile_generation;
+
     if (g_window_manager.menubar_opacity != 1.0f) {
         float alpha = space_is_fullscreen(g_space_manager.current_space_id) ? 1.0f : g_window_manager.menubar_opacity;
         SLSSetMenuBarInsetAndAlpha(g_connection, 0, 1, alpha);
     }
 
-    if (g_mission_control_mode == MISSION_CONTROL_MODE_SHOW || g_mission_control_mode == MISSION_CONTROL_MODE_SHOW_ALL_WINDOWS) {
+    bool reconcile_spaces = mission_control_mode_needs_space_reconcile(g_mission_control_mode);
+    if (reconcile_spaces) {
         window_manager_correct_for_mission_control_changes(&g_space_manager, &g_window_manager);
     }
 
     event_signal_push(SIGNAL_MISSION_CONTROL_EXIT, (void*)(uintptr_t)g_mission_control_mode);
     g_mission_control_mode = MISSION_CONTROL_MODE_INACTIVE;
+
+    if (reconcile_spaces) {
+        mission_control_schedule_space_reconcile(generation);
+    }
+}
+
+static EVENT_HANDLER(MISSION_CONTROL_RECONCILE)
+{
+    uint32_t generation = (uint32_t)(uintptr_t)context;
+    if (!mission_control_reconcile_retry_allowed(generation,
+            g_mission_control_reconcile_generation, mission_control_is_active())) return;
+
+    debug("%s: post-exit pass %d\n", __FUNCTION__, param1);
+    window_manager_reconcile_visible_spaces_after_mission_control(
+        &g_space_manager, &g_window_manager);
 }
 
 static EVENT_HANDLER(DOCK_DID_RESTART)
