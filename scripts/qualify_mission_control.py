@@ -16,6 +16,8 @@ import sys
 import tarfile
 import time
 
+from mission_control_assertions import assess_transfer
+
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = ROOT / "bin" / "yabai"
 CONFIG = ROOT / "scripts" / "qualification.yabairc"
@@ -145,6 +147,8 @@ def main() -> int:
     parser.add_argument("--allow-layout-mutation", action="store_true",
                         help="Explicitly permit temporary BSP configuration of both Spaces")
     parser.add_argument("--skip-build", action="store_true", help="Use an already stamped binary")
+    parser.add_argument("--trials", type=int, default=1, help="Number of manual transfers per daemon session")
+    parser.add_argument("--reverse", action="store_true", help="Alternate transfer direction each trial")
     parser.add_argument("--settle", type=float, default=5.5, help="Seconds after the manual drag")
     args = parser.parse_args()
     if sys.platform != "darwin":
@@ -155,6 +159,8 @@ def main() -> int:
         parser.error("source and destination must be distinct positive Space indices")
     if not args.allow_layout_mutation:
         parser.error("explicit --allow-layout-mutation is required")
+    if not 1 <= args.trials <= 20:
+        parser.error("--trials must be between 1 and 20")
     if args.settle < 1.2:
         parser.error("--settle must be at least 1.2 seconds")
 
@@ -204,30 +210,47 @@ def main() -> int:
         for space, index in zip(verified, (args.source, args.destination)):
             if space["id"] != original[index][0] or space["type"] != "bsp":
                 raise RuntimeError(f"Space {index} BSP setup verification failed")
-        snapshot(folder, "before", (args.source, args.destination))
         print(f"Verified BSP source {args.source} (ID {source['id']}) and "
               f"destination {args.destination} (ID {destination['id']}).")
-        print("\nTest daemon running. Move ONE window between BSP Spaces using Mission Control.")
-        input("Press Enter AFTER the transfer is complete (or Ctrl+C to abort): ")
-        time.sleep(args.settle)
-        snapshot(folder, "after", (args.source, args.destination))
-        after_source, after_destination = selected_spaces(args.source, args.destination)
-        if any(space["id"] != original[index][0] or space["type"] != "bsp"
-               for space, index in zip((after_source, after_destination),
-                                       (args.source, args.destination))):
-            raise RuntimeError("Space identities/layouts changed during transfer")
-        before_source = json.loads((folder / "before-spaces.json").read_text())
-        before_destination = next(x for x in before_source if x["id"] == original[args.destination][0])
-        before_source = next(x for x in before_source if x["id"] == original[args.source][0])
-        moved = (set(before_source["windows"]) - set(after_source["windows"])) & (
-            set(after_destination["windows"]) - set(before_destination["windows"])
-        )
-        if not moved:
-            raise RuntimeError("no source-to-destination window transfer confirmed")
+        trial_results = []
+        for trial in range(1, args.trials + 1):
+            src_idx, dst_idx = args.source, args.destination
+            if args.reverse and trial % 2 == 0:
+                src_idx, dst_idx = dst_idx, src_idx
+            src, dst = selected_spaces(src_idx, dst_idx)
+            if src["id"] != original[src_idx][0] or dst["id"] != original[dst_idx][0]:
+                raise RuntimeError("Space identities changed between trials")
+            prefix = f"trial-{trial:02d}"
+            snapshot(folder, prefix + "-before", (src_idx, dst_idx))
+            print(f"\\nTrial {trial}/{args.trials}: Mission Control drag ONE window "
+                  f"from Space {src_idx} to Space {dst_idx}.")
+            input("Press Enter AFTER the transfer is complete (or Ctrl+C to abort): ")
+            time.sleep(args.settle)
+            snapshot(folder, prefix + "-after", (src_idx, dst_idx))
+            before_spaces = json.loads((folder / f"{prefix}-before-spaces.json").read_text())
+            after_spaces = json.loads((folder / f"{prefix}-after-spaces.json").read_text())
+            after_windows = json.loads((folder / f"{prefix}-after-windows.json").read_text())
+            dumps = {
+                sid: json.loads((folder / f"{prefix}-after-bsp-{idx}.json").read_text())
+                for idx, sid in ((src_idx, src["id"]), (dst_idx, dst["id"]))
+            }
+            try:
+                result = assess_transfer(
+                    before_spaces, after_spaces, after_windows, dumps, src["id"], dst["id"]
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                (folder / f"{prefix}-result.json").write_text(json.dumps({
+                    "result": "FAIL", "reason": str(exc),
+                    "source_index": src_idx, "destination_index": dst_idx,
+                }, indent=2) + "\\n")
+                raise RuntimeError(f"{prefix}: {exc}") from exc
+            trial_results.append(result)
+            (folder / f"{prefix}-result.json").write_text(json.dumps(result, indent=2) + "\\n")
+            print(f"PASS {prefix}: window {result['moved_window_id']} transferred; "
+                  "BSP membership, leaf counts and non-overlap verified.", flush=True)
         (folder / "result.txt").write_text(
-            f"CONFIRMED BSP transfer; moved window IDs: {sorted(moved)}\n"
+            f"PASS {len(trial_results)}/{args.trials} BSP transfer trials.\\n"
         )
-        print("Captured post-transfer state.", flush=True)
         return 0
     except (KeyboardInterrupt, EOFError):
         (folder / "result.txt").write_text("ABORTED: transfer not confirmed.\n")
