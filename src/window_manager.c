@@ -2843,10 +2843,10 @@ void window_manager_correct_for_mission_control_changes(struct space_manager *sm
     wm->window_animation_duration = animation_duration;
 }
 
-// Late WindowServer Space-association updates can arrive after the initial
-// Mission Control exit pass. Recheck *only visible user Spaces*, and only
-// flush views whose membership or geometry actually changed. Unlike the
-// initial pass, do not invalidate every view and force redundant AX writes.
+// WindowServer can publish Mission Control transfers after the exit event.
+// Reconcile all user Spaces, including hidden source/destination Spaces: on a
+// single display neither side of a transfer is necessarily the active Space.
+// Only changed BSP views are flushed; unchanged views incur no AX writes.
 void window_manager_reconcile_visible_spaces_after_mission_control(struct space_manager *sm, struct window_manager *wm)
 {
     int display_count;
@@ -2857,9 +2857,29 @@ void window_manager_reconcile_visible_spaces_after_mission_control(struct space_
     wm->window_animation_duration = 0.0f;
 
     for (int i = 0; i < display_count; ++i) {
-        uint64_t sid = display_space_id(display_list[i]);
-        if (sid && space_is_user(sid)) {
+        int space_count;
+        uint64_t *space_list = display_space_list(display_list[i], &space_count);
+        if (!space_list) continue;
+
+        for (int j = 0; j < space_count; ++j) {
+            uint64_t sid = space_list[j];
+            if (!space_is_user(sid)) continue;
+
+            // Validate membership even for hidden Spaces. The ordinary helper
+            // deliberately defers their frame writes until activation.
             window_manager_validate_and_check_for_windows_on_space(sm, wm, sid);
+
+            struct view *view = space_manager_find_view(sm, sid);
+            if (view->layout == VIEW_FLOAT) continue;
+
+            // A hidden Space with a changed BSP tree must not retain stale
+            // geometry until the user visits it. This runs only after Mission
+            // Control exits, never while the user is dragging a window.
+            if (view_is_invalid(view)) view_update(view);
+            if (view_is_dirty(view)) {
+                window_node_flush(view->root);
+                view_clear_flag(view, VIEW_IS_DIRTY);
+            }
         }
     }
 
