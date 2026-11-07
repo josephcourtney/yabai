@@ -60,6 +60,7 @@ static void mission_control_schedule_space_reconcile(uint32_t generation)
     for (int i = 0; i < (int)array_count(delays_ms); ++i) {
         int delay = delays_ms[i];
         int pass = i + 1;
+        debug("MC_TRACE schedule generation=%u pass=%d delay_ms=%d\n", generation, pass, delay);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                      (int64_t)delay * NSEC_PER_MSEC),
                        dispatch_get_main_queue(), ^{
@@ -1786,6 +1787,7 @@ static EVENT_HANDLER(MISSION_CONTROL_ENTER)
 
 static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
 {
+    debug("MC_TRACE exit_poll active=%d mode=%d\n", mission_control_is_active(), g_mission_control_mode);
     if (!mission_control_is_active()) return;
 
     CFArrayRef window_list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
@@ -1814,6 +1816,7 @@ static EVENT_HANDLER(MISSION_CONTROL_CHECK_FOR_EXIT)
         }
     }
 
+    debug("MC_TRACE exit_poll dock_layer18=%d window_count=%d\n", found, window_count);
     if (found) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.1f * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             event_loop_post(&g_event_loop, MISSION_CONTROL_CHECK_FOR_EXIT, NULL, 0);
@@ -1833,8 +1836,12 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 
     // Dock can emit both an AX exit notification and a fallback poll result.
     // Do not let a duplicate exit cancel the follow-up checks.
-    if (!mission_control_is_active()) return;
+    if (!mission_control_is_active()) {
+        debug("MC_TRACE exit ignored inactive mode=%d\n", g_mission_control_mode);
+        return;
+    }
     uint32_t generation = ++g_mission_control_reconcile_generation;
+    debug("MC_TRACE exit generation=%u mode=%d\n", generation, g_mission_control_mode);
 
     if (g_window_manager.menubar_opacity != 1.0f) {
         float alpha = space_is_fullscreen(g_space_manager.current_space_id) ? 1.0f : g_window_manager.menubar_opacity;
@@ -1842,6 +1849,7 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
     }
 
     bool reconcile_spaces = mission_control_mode_needs_space_reconcile(g_mission_control_mode);
+    debug("MC_TRACE exit reconcile_spaces=%d\n", reconcile_spaces);
     if (reconcile_spaces) {
         window_manager_correct_for_mission_control_changes(&g_space_manager, &g_window_manager);
     }
@@ -1857,8 +1865,12 @@ static EVENT_HANDLER(MISSION_CONTROL_EXIT)
 static EVENT_HANDLER(MISSION_CONTROL_RECONCILE)
 {
     uint32_t generation = (uint32_t)(uintptr_t)context;
-    if (!mission_control_reconcile_retry_allowed(generation,
-            g_mission_control_reconcile_generation, mission_control_is_active())) return;
+    bool active = mission_control_is_active();
+    bool allowed = mission_control_reconcile_retry_allowed(
+        generation, g_mission_control_reconcile_generation, active);
+    debug("MC_TRACE callback generation=%u current=%u pass=%d active=%d allowed=%d\n",
+          generation, g_mission_control_reconcile_generation, param1, active, allowed);
+    if (!allowed) return;
 
     debug("%s: post-exit pass %d\n", __FUNCTION__, param1);
     window_manager_reconcile_visible_spaces_after_mission_control(
