@@ -1117,12 +1117,102 @@ static EVENT_HANDLER(WINDOW_TITLE_CHANGED)
     event_signal_push(SIGNAL_WINDOW_TITLE_CHANGED, window);
 }
 
+// A WindowServer order notification is observed for Mission Control transfers
+// even when Dock's AX Expose notifications never arrive. Delay and coalesce
+// membership checks; never retile on receipt of an order notification itself.
+static uint32_t g_space_membership_probe_generation;
+
+static bool space_membership_probe_mismatch(void)
+{
+    bool mismatch = false;
+    table_for (struct window *window, g_window_manager.window, {
+        struct view *view = window_manager_find_managed_window(&g_window_manager, window);
+        if (view && view->layout != VIEW_FLOAT &&
+            !mouse_is_active_move(&g_mouse_state, window)) {
+            uint64_t sid = window_space(window->id);
+            if (sid && sid != view->sid) {
+                debug("MC_TRACE membership_mismatch wid=%u managed=%llu actual=%llu\\n",
+                      window->id, (unsigned long long)view->sid, (unsigned long long)sid);
+                mismatch = true;
+            }
+        }
+    })
+    return mismatch;
+}
+
+static bool space_membership_probe_dock_overlay(void)
+{
+    // While Mission Control is visibly open, the Space assignment may be
+    // provisional. Defer all AX writes until the Dock overlay disappears.
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, 0);
+    if (!list) return true; // fail closed
+    bool found = false;
+    CFIndex count = CFArrayGetCount(list);
+    for (CFIndex i = 0; i < count; ++i) {
+        CFDictionaryRef info = CFArrayGetValueAtIndex(list, i);
+        CFStringRef owner = CFDictionaryGetValue(info, kCGWindowOwnerName);
+        CFStringRef name = CFDictionaryGetValue(info, kCGWindowName);
+        CFNumberRef layer_ref = CFDictionaryGetValue(info, kCGWindowLayer);
+        int layer = 0;
+        if (!name && owner && layer_ref &&
+            CFNumberGetValue(layer_ref, kCFNumberIntType, &layer) &&
+            layer == 18 && CFEqual(owner, CFSTR("Dock"))) {
+            found = true;
+            break;
+        }
+    }
+    CFRelease(list);
+    return found;
+}
+
+static void space_membership_probe_schedule(void)
+{
+    uint32_t generation = ++g_space_membership_probe_generation;
+    // Two settling samples plus a final retry for delayed WindowServer updates.
+    static const int delays_ms[] = { 300, 750, 1600 };
+    for (int i = 0; i < (int)array_count(delays_ms); ++i) {
+        int pass = i + 1;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)delays_ms[i] * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            event_loop_post(&g_event_loop, SPACE_MEMBERSHIP_PROBE,
+                            (void *)(uintptr_t)generation, pass);
+        });
+    }
+}
+
+static EVENT_HANDLER(SPACE_MEMBERSHIP_PROBE)
+{
+    uint32_t generation = (uint32_t)(uintptr_t)context;
+    if (generation != g_space_membership_probe_generation) return;
+    if (mission_control_is_active() || space_membership_probe_dock_overlay()) {
+        debug("MC_TRACE membership_probe deferred pass=%d\\n", param1);
+        return;
+    }
+    if (!space_membership_probe_mismatch()) return;
+    if (param1 == 1) {
+        // The first sample is observational: an order event can precede
+        // mouse-up. Later samples require the moved membership to persist.
+        debug("MC_TRACE membership_probe unsettled generation=%u\\n", generation);
+        return;
+    }
+    debug("MC_TRACE membership_probe reconcile generation=%u pass=%d\\n",
+          generation, param1);
+    window_manager_reconcile_visible_spaces_after_mission_control(
+        &g_space_manager, &g_window_manager);
+}
+
 static EVENT_HANDLER(SLS_WINDOW_ORDERED)
 {
     uint32_t wid = (uint64_t)(intptr_t) context;
     debug("%s: %d\n", __FUNCTION__, wid);
     struct window_node *node = table_find(&g_window_manager.insert_feedback, &wid);
     if (node) SLSOrderWindow(g_connection, node->feedback_window.id, 1, node->window_order[0]);
+    // Only schedule when the ordered window is known to yabai. Every order
+    // does not imply a transfer; the delayed probe checks actual membership.
+    if (window_manager_find_window(&g_window_manager, wid)) {
+        space_membership_probe_schedule();
+    }
 }
 
 static EVENT_HANDLER(SLS_WINDOW_DESTROYED)
