@@ -1200,7 +1200,15 @@ static EVENT_HANDLER(SPACE_MEMBERSHIP_PROBE)
         }
         return;
     }
-    if (!space_membership_probe_mismatch()) return;
+    bool membership_mismatch = space_membership_probe_mismatch();
+    if (!membership_mismatch) {
+        // A former source Space can have the correct tree but stale frames.
+        // The first pass is observational; use later settling samples.
+        if (param1 > 1) {
+            window_manager_reconcile_stale_bsp_geometry(&g_space_manager, &g_window_manager);
+        }
+        return;
+    }
     if (param1 == 1) {
         // The first sample is observational: an order event can precede
         // mouse-up. Later samples require the moved membership to persist.
