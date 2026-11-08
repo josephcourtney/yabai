@@ -77,6 +77,23 @@ def test_rejects_invalid_qualification(mutation):
         assess_transfer(before, after, windows, layouts, 405, 641)
 
 
+def test_rejects_half_height_stale_source_tile():
+    before, after, windows, layouts = fixture()
+    layouts[405].update({
+        "window_gap": 0, "left_padding": 0, "right_padding": 0,
+        "top_padding": 0, "bottom_padding": 0,
+    })
+    layouts[641].update({
+        "window_gap": 0, "left_padding": 0, "right_padding": 0,
+        "top_padding": 0, "bottom_padding": 0,
+    })
+    # Two destination tiles are side by side, but the left one has not
+    # expanded after a prior window transfer.
+    windows[1]["frame"]["h"] = 100
+    with pytest.raises(ValueError, match="uncovered BSP area"):
+        assess_transfer(before, after, windows, layouts, 405, 641)
+
+
 def test_empty_and_invalid_tree():
     assert leaves(None) == 0
     assert leaves({"type": "leaf"}) == 1
