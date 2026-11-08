@@ -49,7 +49,7 @@ def pause_installed_service(folder: Path) -> bool:
     require(str(installed), "--stop-service")
     for _ in range(40):
         if run("pgrep", "-x", "yabai").returncode == 1:
-            (folder / "service-state.txt").write_text("Service stopped; restart required.\\n")
+            (folder / "service-state.txt").write_text("Service stopped; restart required.\n")
             return True
         time.sleep(0.25)
     raise RuntimeError("installed service did not stop")
@@ -62,6 +62,42 @@ def resume_installed_service(folder: Path) -> None:
     )
     if result.returncode:
         print("WARNING: installed service restart failed", file=sys.stderr)
+
+
+def wait_for_message_socket(proc: subprocess.Popen[bytes], folder: Path, timeout: float = 45.0) -> None:
+    """Require a working query, not merely an existing process."""
+    started = time.monotonic()
+    attempts = 0
+    last_failure = ""
+    while time.monotonic() - started < timeout:
+        if (exit_code := proc.poll()) is not None:
+            raise RuntimeError(f"test daemon exited during startup (exit={exit_code})")
+        result = run(str(BINARY), "-m", "query", "--spaces", timeout=5)
+        attempts += 1
+        if result.returncode == 0:
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                last_failure = "malformed Space-query JSON"
+            else:
+                if isinstance(data, list):
+                    (folder / "socket-readiness.txt").write_text(
+                        f"READY after {time.monotonic() - started:.2f}s, "
+                        f"{attempts} query attempts\n"
+                    )
+                    return
+                last_failure = "Space query returned non-list JSON"
+        else:
+            last_failure = (result.stderr or result.stdout).strip()
+        time.sleep(0.5)
+    (folder / "socket-readiness.txt").write_text(
+        f"TIMEOUT after {time.monotonic() - started:.2f}s, "
+        f"{attempts} attempts; last error: {last_failure}\n"
+    )
+    raise RuntimeError(
+        f"test daemon message socket not ready within {timeout:.0f}s "
+        f"({attempts} attempts): {last_failure}"
+    )
 
 
 def snapshot(folder: Path, name: str, space_indices: tuple[int, int] | None = None) -> None:
@@ -191,9 +227,7 @@ def main() -> int:
             )
         finally:
             log.close()
-        time.sleep(1.5)
-        if proc.poll() is not None:
-            raise RuntimeError(f"test daemon exited early: {proc.returncode}")
+        wait_for_message_socket(proc, folder)
         (folder / "running.log").write_text(
             require("python3", "scripts/qualify_runtime.py", "running", timeout=90)
         )
