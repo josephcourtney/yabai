@@ -2937,8 +2937,14 @@ void window_manager_reconcile_stale_bsp_geometry(struct space_manager *sm, struc
                     if (window_space(window->id) != sid) continue;
 
                     CGRect actual = window_ax_frame(window);
-                    if ((node->area.w > actual.size.width + 3.0f ||
-                         node->area.h > actual.size.height + 3.0f) &&
+                    // Ignore small client-frame differences (Kitty can
+                    // report 5-8 px less than its target without a stale
+                    // layout). A missing half-height tile greatly exceeds
+                    // this absolute and relative tolerance.
+                    float width_slack = fmaxf(12.0f, node->area.w * 0.02f);
+                    float height_slack = fmaxf(12.0f, node->area.h * 0.02f);
+                    if ((node->area.w > actual.size.width + width_slack ||
+                         node->area.h > actual.size.height + height_slack) &&
                         actual.size.width > 0.0f && actual.size.height > 0.0f) {
                         debug("MC_TRACE geometry_mismatch wid=%u sid=%llu expected=%.1fx%.1f actual=%.1fx%.1f\n",
                               window->id, (unsigned long long)sid, node->area.w, node->area.h,
