@@ -2900,6 +2900,64 @@ void window_manager_reconcile_visible_spaces_after_mission_control(struct space_
     wm->window_animation_duration = animation_duration;
 }
 
+// Membership can already be correct while an unaffected source tile retains
+// its old geometry. Check the live AX frame against the BSP leaf's target
+// region after the WindowServer order-event settling interval. Only repair
+// undersized tiles: client-enforced minimum sizes are typically oversized and
+// must not cause an endless correction loop.
+void window_manager_reconcile_stale_bsp_geometry(struct space_manager *sm, struct window_manager *wm)
+{
+    int display_count;
+    uint32_t *displays = display_manager_active_display_list(&display_count);
+    if (!displays) return;
+
+    float animation_duration = wm->window_animation_duration;
+    wm->window_animation_duration = 0.0f;
+
+    for (int i = 0; i < display_count; ++i) {
+        int space_count;
+        uint64_t *space_list = display_space_list(displays[i], &space_count);
+        if (!space_list) continue;
+
+        for (int j = 0; j < space_count; ++j) {
+            uint64_t sid = space_list[j];
+            if (!space_is_user(sid)) continue;
+            struct view *view = space_manager_find_view(sm, sid);
+            if (!view || view->layout != VIEW_BSP || view_is_invalid(view)) continue;
+
+            bool undersized = false;
+            for (struct window_node *node = window_node_find_first_leaf(view->root);
+                 node && !undersized; node = window_node_find_next_leaf(node)) {
+                if (node->zoom) continue;
+                for (int k = 0; k < node->window_count; ++k) {
+                    struct window *window = window_manager_find_window(wm, node->window_list[k]);
+                    if (!window || !window_can_resize(window) ||
+                        mouse_is_active_move(&g_mouse_state, window) ||
+                        window_is_fullscreen(window)) continue;
+                    if (window_space(window->id) != sid) continue;
+
+                    CGRect actual = window_ax_frame(window);
+                    if ((node->area.w > actual.size.width + 3.0f ||
+                         node->area.h > actual.size.height + 3.0f) &&
+                        actual.size.width > 0.0f && actual.size.height > 0.0f) {
+                        debug("MC_TRACE geometry_mismatch wid=%u sid=%llu expected=%.1fx%.1f actual=%.1fx%.1f\n",
+                              window->id, (unsigned long long)sid, node->area.w, node->area.h,
+                              actual.size.width, actual.size.height);
+                        undersized = true;
+                        break;
+                    }
+                }
+            }
+            if (undersized) {
+                debug("MC_TRACE geometry_reconcile sid=%llu\n", (unsigned long long)sid);
+                window_node_flush(view->root);
+                view_clear_flag(view, VIEW_IS_DIRTY);
+            }
+        }
+    }
+    wm->window_animation_duration = animation_duration;
+}
+
 void window_manager_handle_display_add_and_remove(struct space_manager *sm, struct window_manager *wm, uint32_t did)
 {
     int space_count;
