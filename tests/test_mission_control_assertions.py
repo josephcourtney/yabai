@@ -94,6 +94,12 @@ def test_rejects_half_height_stale_source_tile():
         assess_transfer(before, after, windows, layouts, 405, 641)
 
 
+def test_reports_wrong_transfer_direction():
+    before, after, windows, layouts = fixture()
+    with pytest.raises(ValueError, match="transfer direction reversed"):
+        assess_transfer(after, before, windows, layouts, 405, 641)
+
+
 def test_empty_and_invalid_tree():
     assert leaves(None) == 0
     assert leaves({"type": "leaf"}) == 1
