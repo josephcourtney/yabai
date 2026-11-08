@@ -66,6 +66,26 @@ def assess_transfer(
             frame = window["frame"]
             if frame["w"] <= 0 or frame["h"] <= 0:
                 raise ValueError(f"window {window['id']} has invalid frame")
+        # On zero-gap, zero-padding layouts, the tiled rectangles should
+        # partition their combined bounding box. Non-overlap alone misses
+        # stale half-height tiles after a source Space loses a window.
+        dump = layouts[sid]
+        if len(managed) >= 2 and dump.get("window_gap") == 0 and all(
+            dump.get(key) == 0 for key in
+            ("left_padding", "right_padding", "top_padding", "bottom_padding")
+        ):
+            frames = [w["frame"] for w in managed]
+            x0 = min(f["x"] for f in frames)
+            y0 = min(f["y"] for f in frames)
+            x1 = max(f["x"] + f["w"] for f in frames)
+            y1 = max(f["y"] + f["h"] for f in frames)
+            box_area = (x1 - x0) * (y1 - y0)
+            tiled_area = sum(f["w"] * f["h"] for f in frames)
+            if box_area > 0 and (box_area - tiled_area) / box_area > 0.02:
+                raise ValueError(
+                    f"Space {sid} has uncovered BSP area: "
+                    f"{(box_area - tiled_area) / box_area:.1%} of tile envelope"
+                )
         count = leaves(layouts[sid]["tree"])
         if count != len(managed):
             raise ValueError(f"Space {sid} BSP leaves={count}, managed windows={len(managed)}")
