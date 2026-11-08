@@ -46,6 +46,13 @@ def assess_transfer(
     after_dst = set(after[destination_id]["windows"])
     moved = (before_src - after_src) & (after_dst - before_dst)
     if len(moved) != 1:
+        reverse = (before_dst - after_dst) & (after_src - before_src)
+        if reverse:
+            raise ValueError(
+                f"transfer direction reversed: observed Space {destination_id} "
+                f"→ {source_id}, window IDs {sorted(reverse)}; expected "
+                f"Space {source_id} → {destination_id}"
+            )
         raise ValueError(f"expected one source-to-destination window, found {sorted(moved)}")
     if after_src != before_src - moved or after_dst != before_dst | moved:
         raise ValueError("unrelated window membership changed during trial")
