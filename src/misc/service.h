@@ -207,6 +207,45 @@ static bool service_message_socket_reachable(void)
     return reachable;
 }
 
+// A successful launchctl bootstrap is not a ready yabai daemon: the
+// message listener starts only after window-manager initialization.
+static bool service_readiness_is_healthy(bool loaded, pid_t pid,
+                                         bool running_matches, bool socket_ready)
+{
+    return loaded && pid > 0 && running_matches && socket_ready;
+}
+
+static int service_wait_for_ready(void)
+{
+    char invoked[4096] = {0};
+    if (!service_self_executable(invoked, sizeof(invoked))) {
+        warn("yabai: could not determine executable while waiting for service readiness\n");
+        return 1;
+    }
+
+    // Do not report successful startup until launchd's actual process is
+    // this executable AND its message listener accepts connections.
+    // A slow first login or Dock startup may need several seconds.
+    for (int attempt = 0; attempt < 60; ++attempt) {
+        pid_t pid = 0;
+        bool loaded = service_launchd_job(_NAME_YABAI_PLIST, &pid);
+        char running[PROC_PIDPATHINFO_MAXSIZE] = {0};
+        bool running_matches = loaded && pid > 0 &&
+                               proc_pidpath(pid, running, sizeof(running)) > 0 &&
+                               service_same_executable(running, invoked);
+        bool socket_ready = running_matches && service_message_socket_reachable();
+        if (service_readiness_is_healthy(loaded, pid, running_matches, socket_ready)) {
+            return 0;
+        }
+        usleep(500000);
+    }
+
+    warn("yabai: launchd accepted the service, but the matching daemon's "
+         "message socket did not become ready within 30 seconds; "
+         "check --service-status and the yabai service logs\n");
+    return 1;
+}
+
 static int service_status(void)
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -271,8 +310,8 @@ static int service_status(void)
             conflict = true;
         }
     }
-    int result = state == SERVICE_PLIST_VALID && matching && loaded &&
-                 pid > 0 && running_matches && socket_ready && !conflict ? 0 : 1;
+    int result = state == SERVICE_PLIST_VALID && matching && !conflict &&
+                 service_readiness_is_healthy(loaded, pid, running_matches, socket_ready) ? 0 : 1;
     free(path);
     [pool drain];
     return result;
@@ -540,7 +579,9 @@ static int service_start(void)
         //
 
         const char *const args2[] = { _PATH_LAUNCHCTL, "bootstrap", domain_target, yabai_plist_path, NULL };
-        return safe_exec((char *const*)args2, false);
+        int result = safe_exec((char *const*)args2, false);
+        free(yabai_plist_path);
+        return result ? result : service_wait_for_ready();
     } else {
 
         //
@@ -550,7 +591,9 @@ static int service_start(void)
         //
 
         const char *const args[] = { _PATH_LAUNCHCTL, "kickstart", service_target, NULL };
-        return safe_exec((char *const*)args, false);
+        int result = safe_exec((char *const*)args, false);
+        free(yabai_plist_path);
+        return result ? result : service_wait_for_ready();
     }
 }
 
@@ -580,7 +623,9 @@ static int service_restart(void)
     snprintf(service_target, sizeof(service_target), "gui/%d/%s", getuid(), _NAME_YABAI_PLIST);
 
     const char *const args[] = { _PATH_LAUNCHCTL, "kickstart", "-k", service_target, NULL };
-    return safe_exec((char *const*)args, false);
+    int result = safe_exec((char *const*)args, false);
+    free(yabai_plist_path);
+    return result ? result : service_wait_for_ready();
 }
 
 static int service_stop(void)
