@@ -313,29 +313,82 @@ static inline void ensure_directory_exists(char *yabai_plist_path)
 
 static int service_install_internal(char *yabai_plist_path)
 {
-    int yabai_plist_length;
-    char *yabai_plist = populate_plist(&yabai_plist_length);
+    int length = 0;
+    char *contents = populate_plist(&length);
     ensure_directory_exists(yabai_plist_path);
 
-    FILE *handle = fopen(yabai_plist_path, "w");
-    if (!handle) return 1;
+    // Never truncate an existing plist in place. Write a complete private
+    // temporary file on the same filesystem, then atomically rename it.
+    size_t size = strlen(yabai_plist_path) + sizeof(".tmp.XXXXXX");
+    char *temporary = malloc(size);
+    if (!temporary) { free(contents); return 1; }
+    snprintf(temporary, size, "%s.tmp.XXXXXX", yabai_plist_path);
 
-    size_t bytes = fwrite(yabai_plist, yabai_plist_length, 1, handle);
-    int result = bytes == 1 ? 0 : 1;
-    fclose(handle);
-
+    int fd = mkstemp(temporary);
+    if (fd < 0) { free(temporary); free(contents); return 1; }
+    int result = 0;
+    if (fchmod(fd, 0644) != 0) result = 1;
+    size_t written = 0;
+    while (!result && written < (size_t)length) {
+        ssize_t count = write(fd, contents + written, (size_t)length - written);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { result = 1; break; }
+        written += (size_t)count;
+    }
+    if (!result && fsync(fd) != 0) result = 1;
+    if (close(fd) != 0) result = 1;
+    if (!result && rename(temporary, yabai_plist_path) != 0) result = 1;
+    if (result) unlink(temporary);
+    free(temporary);
+    free(contents);
     return result;
 }
 
-static int service_install(void)
+static int service_install(bool replace)
 {
-    char *yabai_plist_path = populate_plist_path();
-
-    if (file_exists(yabai_plist_path)) {
-        error("yabai: service file '%s' is already installed! abort..\n", yabai_plist_path);
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    char *path = populate_plist_path();
+    char configured[4096] = {0}, current[4096] = {0};
+    enum service_plist_state state = service_read_plist_executable(
+        path, configured, sizeof(configured));
+    if (!service_self_executable(current, sizeof(current))) {
+        warn("yabai: cannot resolve this executable; refusing service installation\n");
+        free(path); [pool drain]; return 1;
     }
 
-    return service_install_internal(yabai_plist_path);
+    if (state == SERVICE_PLIST_INVALID) {
+        warn("yabai: '%s' is malformed, a symlink, or uses another label; refusing to overwrite\n", path);
+        free(path); [pool drain]; return 1;
+    }
+
+    if (state == SERVICE_PLIST_VALID &&
+        service_same_executable(configured, current)) {
+        printf("yabai: service already installed for %s\n", current);
+        free(path); [pool drain]; return 0;
+    }
+
+    if (state == SERVICE_PLIST_VALID && !replace) {
+        warn("yabai: service executable mismatch\n  installed: %s\n  invoked:   %s\n"
+             "Use --install-service --replace to update it explicitly\n",
+             configured, current);
+        free(path); [pool drain]; return 1;
+    }
+
+    if (service_launchd_job(_NAME_YABAI_PLIST, NULL)) {
+        warn("yabai: service is loaded; run --stop-service before installation/replacement\n");
+        free(path); [pool drain]; return 1;
+    }
+
+    int result = service_install_internal(path);
+    if (!result) {
+        printf("yabai: %s service for %s\n",
+               state == SERVICE_PLIST_MISSING ? "installed" : "replaced", current);
+    } else {
+        warn("yabai: failed to write service plist '%s'\n", path);
+    }
+    free(path);
+    [pool drain];
+    return result;
 }
 
 static int service_uninstall(void)
