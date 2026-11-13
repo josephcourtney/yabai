@@ -257,6 +257,44 @@ static int service_status(void)
     return result;
 }
 
+// Escape substituted strings so PATH and executable paths containing XML
+// metacharacters cannot produce an invalid or misleading launchd plist.
+static char *service_xml_escape(const char *value)
+{
+    size_t length = strlen(value);
+    size_t extra = 0;
+    for (const char *p = value; *p; ++p) {
+        switch (*p) {
+        case '&': extra += 4; break;
+        case '<': case '>': extra += 3; break;
+        case '"': case '\'': extra += 5; break;
+        }
+    }
+    if (length > SIZE_MAX - extra - 1) error("yabai: XML attribute too long\n");
+    char *output = malloc(length + extra + 1);
+    if (!output) error("yabai: XML escape allocation failed\n");
+    char *cursor = output;
+    for (const char *p = value; *p; ++p) {
+        const char *encoded = NULL;
+        switch (*p) {
+        case '&': encoded = "&amp;"; break;
+        case '<': encoded = "&lt;"; break;
+        case '>': encoded = "&gt;"; break;
+        case '"': encoded = "&quot;"; break;
+        case '\'': encoded = "&apos;"; break;
+        }
+        if (encoded) {
+            size_t count = strlen(encoded);
+            memcpy(cursor, encoded, count);
+            cursor += count;
+        } else {
+            *cursor++ = *p;
+        }
+    }
+    *cursor = '\0';
+    return output;
+}
+
 static char *populate_plist(int *length)
 {
     char *user = getenv("USER");
@@ -275,16 +313,25 @@ static char *populate_plist(int *length)
         error("yabai: unable to retrieve path of executable! abort..\n");
     }
 
-    int size = strlen(_YABAI_PLIST)-8 + strlen(exe_path) + strlen(path_env) + (2*strlen(user)) + 1;
+    char *escaped_exe = service_xml_escape(exe_path);
+    char *escaped_path = service_xml_escape(path_env);
+    char *escaped_user = service_xml_escape(user);
+    size_t size = strlen(_YABAI_PLIST)-8 + strlen(escaped_exe) +
+                  strlen(escaped_path) + 2*strlen(escaped_user) + 1;
+    if (size > INT_MAX) error("yabai: service plist is too large\n");
     char *result = malloc(size);
-    if (!result) {
-        error("yabai: could not allocate memory for plist contents! abort..\n");
+    if (!result) error("yabai: could not allocate memory for plist contents!\n");
+
+    int written = snprintf(result, size, _YABAI_PLIST,
+                           escaped_exe, escaped_path, escaped_user, escaped_user);
+    free(escaped_exe);
+    free(escaped_path);
+    free(escaped_user);
+    if (written < 0 || (size_t)written >= size) {
+        free(result);
+        error("yabai: service plist formatting failed\n");
     }
-
-    memset(result, 0, size);
-    snprintf(result, size, _YABAI_PLIST, exe_path, path_env, user, user);
-    *length = size-1;
-
+    *length = written;
     return result;
 }
 
