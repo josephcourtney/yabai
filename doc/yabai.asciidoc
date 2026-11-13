@@ -23,7 +23,7 @@ yabai - window manager
 Synopsis
 --------
 
-*yabai* [*--load-sa*|*--uninstall-sa*|*--check-sa*|*--install-service*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
+*yabai* [*--load-sa*|*--uninstall-sa*|*--check-sa*|*--install-service* [*--replace*]|*--service-status*|*--uninstall-service*|*--start-service*|*--restart-service*|*--stop-service*|*--message*,*-m* 'msg'|*--config*,*-c* 'config_file'|*--verbose*,*-V*|*--version*,*-v*|*--help*,*-h*]
 
 Description
 -----------
@@ -51,9 +51,24 @@ Options
     Exits 0 only when the payload responds, matches this build's version, and
     advertises full support for the current macOS; non-zero otherwise.
 
-*--install-service*::
-    Writes a launchd service file to disk. +
-    Path is ~/Library/LaunchAgents/com.asmvik.yabai.plist.
+*--install-service* [*--replace*]::
+    Installs ~/Library/LaunchAgents/com.asmvik.yabai.plist using the absolute
+    executable path of the yabai binary invoked. Repeating installation with
+    the same executable is a no-op; existing custom service arguments are
+    preserved. If an existing plist points to another executable, exits
+    nonzero without modifying it. Use *--install-service --replace* to replace
+    that plist explicitly, after stopping the service. An invalid, symlinked,
+    or foreign-label plist is never overwritten. Changes are written
+    atomically. This command does not start the service.
+
+*--service-status*::
+    Reports the installed plist, configured executable, optional config
+    argument, current binary, launchd bootstrap state, running PID and
+    executable, socket reachability, and known competing yabai services.
+    Does not modify service state. Exits 0 only if the expected service is
+    installed, bootstrapped, running from the invoked executable, reachable
+    through its message socket, and has no detected competing launchd job.
+    A mismatched or stopped service results in a nonzero exit.
 
 *--uninstall-service*::
     Removes a launchd service file from disk. +
@@ -61,10 +76,16 @@ Options
 
 *--start-service*::
     Enables, loads, and starts the launchd service. +
-    Will install service file if it does not exist.
+    Installs the service if absent, but refuses to start a service configured
+    for another executable. Refuses startup when a known competing yabai
+    launchd job is loaded. After launchd accepts the job, waits up to 30
+    seconds for a running instance of this executable and its message socket.
+    Returns nonzero if initialization does not complete within that period.
 
 *--restart-service*::
-    Attempts to restart the service instance.
+    Attempts to restart the service instance. Refuses an executable mismatch
+    or a known competing yabai launchd job. Waits up to 30 seconds for
+    the replacement daemon to become reachable before reporting success.
 
 *--stop-service*::
     Stops a running instance of the service and unloads it.

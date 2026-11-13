@@ -13,6 +13,7 @@ typedef TEST_SIG(function);
 
 #include "area.c"
 #include "mouse.c"
+#include "service.c"
 
 #define TEST_ENTRY(name) { #name, test_##name },
 #define TEST_LIST                                              \
@@ -53,7 +54,12 @@ typedef TEST_SIG(function);
     TEST_ENTRY(bsp_preview_geometry_requires_position_after_size_preflight) \
     TEST_ENTRY(bsp_preview_minimum_clamp_preserves_right_edge) \
     TEST_ENTRY(mission_control_reconcile_only_for_space_expose_modes) \
-    TEST_ENTRY(mission_control_reconcile_rejects_stale_and_active_retries)
+    TEST_ENTRY(mission_control_reconcile_rejects_stale_and_active_retries) \
+    TEST_ENTRY(service_install_policy_is_idempotent_and_refuses_unsafe_replacement) \
+    TEST_ENTRY(service_readiness_requires_running_matching_daemon_and_socket) \
+    TEST_ENTRY(service_xml_escaping_is_lossless) \
+    TEST_ENTRY(service_executable_identity_uses_resolved_paths) \
+    TEST_ENTRY(service_plist_rejects_other_labels_and_symlinks)
 
 static struct {
     char *name;

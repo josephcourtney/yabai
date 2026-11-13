@@ -98,6 +98,263 @@ static char *populate_plist_path(void)
     return result;
 }
 
+// Service identity is the absolute executable selected by the caller, not
+// whichever yabai happens to be on PATH (which may be Homebrew's binary).
+static bool service_self_executable(char *output, size_t capacity)
+{
+    char path[4096];
+    uint32_t length = sizeof(path);
+    if (!output || capacity < PATH_MAX ||
+        _NSGetExecutablePath(path, &length) != 0) return false;
+    return realpath(path, output) != NULL;
+}
+
+static bool service_same_executable(const char *left, const char *right)
+{
+    if (!left || !right || !left[0] || !right[0]) return false;
+    char a[4096], b[4096];
+    if (realpath(left, a) && realpath(right, b)) {
+        return strcmp(a, b) == 0;
+    }
+    // A removed binary is never silently treated as the current executable.
+    return false;
+}
+
+enum service_plist_state
+{
+    SERVICE_PLIST_MISSING,
+    SERVICE_PLIST_VALID,
+    SERVICE_PLIST_INVALID
+};
+
+// Accept only the expected launchd label and an absolute first executable.
+// Never overwrite a foreign or malformed plist, even with --replace.
+static enum service_plist_state service_read_plist_executable(const char *path,
+                                                              char *configured,
+                                                              size_t capacity)
+{
+    if (configured && capacity) configured[0] = '\0';
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT ? SERVICE_PLIST_MISSING : SERVICE_PLIST_INVALID;
+    }
+    if (!S_ISREG(st.st_mode)) return SERVICE_PLIST_INVALID;
+
+    NSString *file = [NSString stringWithUTF8String:path];
+    NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:file];
+    if (![plist isKindOfClass:[NSDictionary class]]) return SERVICE_PLIST_INVALID;
+
+    id label = [plist objectForKey:@"Label"];
+    id arguments = [plist objectForKey:@"ProgramArguments"];
+    if (![label isKindOfClass:[NSString class]] ||
+        ![label isEqualToString:[NSString stringWithUTF8String:_NAME_YABAI_PLIST]] ||
+        ![arguments isKindOfClass:[NSArray class]] ||
+        [arguments count] == 0) return SERVICE_PLIST_INVALID;
+
+    id executable = [arguments objectAtIndex:0];
+    if (![executable isKindOfClass:[NSString class]]) return SERVICE_PLIST_INVALID;
+    const char *value = [executable UTF8String];
+    if (!value || value[0] != '/' || strlen(value) >= capacity) return SERVICE_PLIST_INVALID;
+    memcpy(configured, value, strlen(value) + 1);
+    return SERVICE_PLIST_VALID;
+}
+
+// launchctl's successful 'print' means the job is bootstrapped. Its PID is
+// present only when there is a running instance. The command is composed
+// entirely of constant text and a numeric UID (no user-controlled shell input).
+static bool service_launchd_job(const char *label, pid_t *running_pid)
+{
+    if (running_pid) *running_pid = 0;
+    char command[256];
+    int length = snprintf(command, sizeof(command),
+                          "/bin/launchctl print gui/%u/%s 2>/dev/null",
+                          (unsigned)getuid(), label);
+    if (length <= 0 || length >= (int)sizeof(command)) return false;
+    FILE *pipe = popen(command, "r");
+    if (!pipe) return false;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), pipe)) {
+        char *cursor = line;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (strncmp(cursor, "pid = ", 6) == 0 && running_pid) {
+            char *end = NULL;
+            errno = 0;
+            long value = strtol(cursor + 6, &end, 10);
+            if (!errno && end != cursor + 6 && value > 0 && value <= INT_MAX) {
+                *running_pid = (pid_t)value;
+            }
+        }
+    }
+    int status = pclose(pipe);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static bool service_message_socket_reachable(void)
+{
+    const char *user = getenv("USER");
+    if (!user) return false;
+    char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    int length = snprintf(path, sizeof(path), "/tmp/yabai_%s.socket", user);
+    if (length <= 0 || length >= (int)sizeof(path)) return false;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_un address = {0};
+    address.sun_family = AF_UNIX;
+    memcpy(address.sun_path, path, (size_t)length + 1);
+    bool reachable = connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0;
+    close(fd);
+    return reachable;
+}
+
+// A successful launchctl bootstrap is not a ready yabai daemon: the
+// message listener starts only after window-manager initialization.
+static bool service_readiness_is_healthy(bool loaded, pid_t pid,
+                                         bool running_matches, bool socket_ready)
+{
+    return loaded && pid > 0 && running_matches && socket_ready;
+}
+
+static int service_wait_for_ready(void)
+{
+    char invoked[4096] = {0};
+    if (!service_self_executable(invoked, sizeof(invoked))) {
+        warn("yabai: could not determine executable while waiting for service readiness\n");
+        return 1;
+    }
+
+    // Do not report successful startup until launchd's actual process is
+    // this executable AND its message listener accepts connections.
+    // A slow first login or Dock startup may need several seconds.
+    for (int attempt = 0; attempt < 60; ++attempt) {
+        pid_t pid = 0;
+        bool loaded = service_launchd_job(_NAME_YABAI_PLIST, &pid);
+        char running[PROC_PIDPATHINFO_MAXSIZE] = {0};
+        bool running_matches = loaded && pid > 0 &&
+                               proc_pidpath(pid, running, sizeof(running)) > 0 &&
+                               service_same_executable(running, invoked);
+        bool socket_ready = running_matches && service_message_socket_reachable();
+        if (service_readiness_is_healthy(loaded, pid, running_matches, socket_ready)) {
+            return 0;
+        }
+        usleep(500000);
+    }
+
+    warn("yabai: launchd accepted the service, but the matching daemon's "
+         "message socket did not become ready within 30 seconds; "
+         "check --service-status and the yabai service logs\n");
+    return 1;
+}
+
+static int service_status(void)
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    char *path = populate_plist_path();
+    char configured[4096] = {0}, invoked[4096] = {0};
+    bool have_invoked = service_self_executable(invoked, sizeof(invoked));
+    enum service_plist_state state = service_read_plist_executable(
+        path, configured, sizeof(configured));
+    pid_t pid = 0;
+    bool loaded = service_launchd_job(_NAME_YABAI_PLIST, &pid);
+    char running[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    bool have_running = pid > 0 && proc_pidpath(pid, running, sizeof(running)) > 0;
+    bool matching = state == SERVICE_PLIST_VALID && have_invoked &&
+                    service_same_executable(configured, invoked);
+    bool running_matches = have_running && have_invoked &&
+                            service_same_executable(running, invoked);
+    bool socket_ready = pid > 0 && service_message_socket_reachable();
+
+    fprintf(stdout, "service: %s\n", _NAME_YABAI_PLIST);
+    fprintf(stdout, "plist: %s\n", path);
+    fprintf(stdout, "installed: %s\n",
+            state == SERVICE_PLIST_MISSING ? "no" :
+            state == SERVICE_PLIST_VALID ? "yes" : "invalid");
+    fprintf(stdout, "configured-executable: %s\n",
+            state == SERVICE_PLIST_VALID ? configured : "(unavailable)");
+
+    const char *configured_config = "(default; no --config argument)";
+    if (state == SERVICE_PLIST_VALID) {
+        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:
+                               [NSString stringWithUTF8String:path]];
+        NSArray *arguments = [plist objectForKey:@"ProgramArguments"];
+        for (NSUInteger i = 1; i + 1 < [arguments count]; ++i) {
+            id argument = [arguments objectAtIndex:i];
+            if ([argument isKindOfClass:[NSString class]] &&
+                ([argument isEqualToString:@"--config"] ||
+                 [argument isEqualToString:@"-c"])) {
+                id value = [arguments objectAtIndex:i+1];
+                if ([value isKindOfClass:[NSString class]]) {
+                    configured_config = [value UTF8String];
+                    break;
+                }
+            }
+        }
+    }
+    fprintf(stdout, "config-argument: %s\n", configured_config);
+    fprintf(stdout, "invoked-executable: %s\n",
+            have_invoked ? invoked : "(unavailable)");
+    fprintf(stdout, "executable-match: %s\n", matching ? "yes" : "no");
+    fprintf(stdout, "bootstrapped: %s\n", loaded ? "yes" : "no");
+    fprintf(stdout, "pid: %d\n", (int)pid);
+    fprintf(stdout, "running-executable: %s\n",
+            have_running ? running : "(unavailable)");
+    fprintf(stdout, "running-executable-match: %s\n",
+            running_matches ? "yes" : "no");
+    fprintf(stdout, "message-socket: %s\n", socket_ready ? "reachable" : "unreachable");
+
+    const char *other_labels[] = {"com.koekeishiya.yabai", "homebrew.mxcl.yabai"};
+    bool conflict = false;
+    for (int i = 0; i < (int)(sizeof(other_labels)/sizeof(other_labels[0])); ++i) {
+        if (service_launchd_job(other_labels[i], NULL)) {
+            fprintf(stdout, "competing-service: %s\n", other_labels[i]);
+            conflict = true;
+        }
+    }
+    int result = state == SERVICE_PLIST_VALID && matching && !conflict &&
+                 service_readiness_is_healthy(loaded, pid, running_matches, socket_ready) ? 0 : 1;
+    free(path);
+    [pool drain];
+    return result;
+}
+
+// Escape substituted strings so PATH and executable paths containing XML
+// metacharacters cannot produce an invalid or misleading launchd plist.
+static char *service_xml_escape(const char *value)
+{
+    size_t length = strlen(value);
+    size_t extra = 0;
+    for (const char *p = value; *p; ++p) {
+        switch (*p) {
+        case '&': extra += 4; break;
+        case '<': case '>': extra += 3; break;
+        case '"': case '\'': extra += 5; break;
+        }
+    }
+    if (length > SIZE_MAX - extra - 1) error("yabai: XML attribute too long\n");
+    char *output = malloc(length + extra + 1);
+    if (!output) error("yabai: XML escape allocation failed\n");
+    char *cursor = output;
+    for (const char *p = value; *p; ++p) {
+        const char *encoded = NULL;
+        switch (*p) {
+        case '&': encoded = "&amp;"; break;
+        case '<': encoded = "&lt;"; break;
+        case '>': encoded = "&gt;"; break;
+        case '"': encoded = "&quot;"; break;
+        case '\'': encoded = "&apos;"; break;
+        }
+        if (encoded) {
+            size_t count = strlen(encoded);
+            memcpy(cursor, encoded, count);
+            cursor += count;
+        } else {
+            *cursor++ = *p;
+        }
+    }
+    *cursor = '\0';
+    return output;
+}
+
 static char *populate_plist(int *length)
 {
     char *user = getenv("USER");
@@ -111,21 +368,29 @@ static char *populate_plist(int *length)
     }
 
     char exe_path[4096];
-    unsigned int exe_path_size = sizeof(exe_path);
-    if (_NSGetExecutablePath(exe_path, &exe_path_size) < 0) {
-        error("yabai: unable to retrieve path of executable! abort..\n");
+    if (!service_self_executable(exe_path, sizeof(exe_path))) {
+        error("yabai: unable to resolve absolute path of executable!\n");
     }
 
-    int size = strlen(_YABAI_PLIST)-8 + strlen(exe_path) + strlen(path_env) + (2*strlen(user)) + 1;
+    char *escaped_exe = service_xml_escape(exe_path);
+    char *escaped_path = service_xml_escape(path_env);
+    char *escaped_user = service_xml_escape(user);
+    size_t size = strlen(_YABAI_PLIST)-8 + strlen(escaped_exe) +
+                  strlen(escaped_path) + 2*strlen(escaped_user) + 1;
+    if (size > INT_MAX) error("yabai: service plist is too large\n");
     char *result = malloc(size);
-    if (!result) {
-        error("yabai: could not allocate memory for plist contents! abort..\n");
+    if (!result) error("yabai: could not allocate memory for plist contents!\n");
+
+    int written = snprintf(result, size, _YABAI_PLIST,
+                           escaped_exe, escaped_path, escaped_user, escaped_user);
+    free(escaped_exe);
+    free(escaped_path);
+    free(escaped_user);
+    if (written < 0 || (size_t)written >= size) {
+        free(result);
+        error("yabai: service plist formatting failed\n");
     }
-
-    memset(result, 0, size);
-    snprintf(result, size, _YABAI_PLIST, exe_path, path_env, user, user);
-    *length = size-1;
-
+    *length = written;
     return result;
 }
 
@@ -154,29 +419,110 @@ static inline void ensure_directory_exists(char *yabai_plist_path)
 
 static int service_install_internal(char *yabai_plist_path)
 {
-    int yabai_plist_length;
-    char *yabai_plist = populate_plist(&yabai_plist_length);
+    int length = 0;
+    char *contents = populate_plist(&length);
     ensure_directory_exists(yabai_plist_path);
 
-    FILE *handle = fopen(yabai_plist_path, "w");
-    if (!handle) return 1;
+    // Never truncate an existing plist in place. Write a complete private
+    // temporary file on the same filesystem, then atomically rename it.
+    size_t size = strlen(yabai_plist_path) + sizeof(".tmp.XXXXXX");
+    char *temporary = malloc(size);
+    if (!temporary) { free(contents); return 1; }
+    snprintf(temporary, size, "%s.tmp.XXXXXX", yabai_plist_path);
 
-    size_t bytes = fwrite(yabai_plist, yabai_plist_length, 1, handle);
-    int result = bytes == 1 ? 0 : 1;
-    fclose(handle);
-
+    int fd = mkstemp(temporary);
+    if (fd < 0) { free(temporary); free(contents); return 1; }
+    int result = 0;
+    if (fchmod(fd, 0644) != 0) result = 1;
+    size_t written = 0;
+    while (!result && written < (size_t)length) {
+        ssize_t count = write(fd, contents + written, (size_t)length - written);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { result = 1; break; }
+        written += (size_t)count;
+    }
+    if (!result && fsync(fd) != 0) result = 1;
+    if (close(fd) != 0) result = 1;
+    if (!result) {
+        char parsed[4096];
+        if (service_read_plist_executable(temporary, parsed, sizeof(parsed)) !=
+            SERVICE_PLIST_VALID) {
+            warn("yabai: generated plist is not valid; refusing to install\n");
+            result = 1;
+        }
+    }
+    if (!result && rename(temporary, yabai_plist_path) != 0) result = 1;
+    if (result) unlink(temporary);
+    free(temporary);
+    free(contents);
     return result;
 }
 
-static int service_install(void)
+enum service_install_decision
 {
-    char *yabai_plist_path = populate_plist_path();
+    SERVICE_INSTALL_NOOP,
+    SERVICE_INSTALL_WRITE,
+    SERVICE_INSTALL_REJECT_INVALID,
+    SERVICE_INSTALL_REJECT_MISMATCH,
+    SERVICE_INSTALL_REJECT_LOADED
+};
 
-    if (file_exists(yabai_plist_path)) {
-        error("yabai: service file '%s' is already installed! abort..\n", yabai_plist_path);
+static enum service_install_decision service_install_decide(
+    enum service_plist_state state, bool executable_matches,
+    bool replace, bool loaded)
+{
+    if (state == SERVICE_PLIST_INVALID) return SERVICE_INSTALL_REJECT_INVALID;
+    if (state == SERVICE_PLIST_VALID && executable_matches) return SERVICE_INSTALL_NOOP;
+    if (state == SERVICE_PLIST_VALID && !replace) return SERVICE_INSTALL_REJECT_MISMATCH;
+    if (loaded) return SERVICE_INSTALL_REJECT_LOADED;
+    return SERVICE_INSTALL_WRITE;
+}
+
+static int service_install(bool replace)
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    char *path = populate_plist_path();
+    char configured[4096] = {0}, current[4096] = {0};
+    enum service_plist_state state = service_read_plist_executable(
+        path, configured, sizeof(configured));
+    if (!service_self_executable(current, sizeof(current))) {
+        warn("yabai: cannot resolve this executable; refusing service installation\n");
+        free(path); [pool drain]; return 1;
     }
 
-    return service_install_internal(yabai_plist_path);
+    bool same = state == SERVICE_PLIST_VALID &&
+                service_same_executable(configured, current);
+    enum service_install_decision decision = service_install_decide(
+        state, same, replace, service_launchd_job(_NAME_YABAI_PLIST, NULL));
+    switch (decision) {
+    case SERVICE_INSTALL_NOOP:
+        printf("yabai: service already installed for %s\n", current);
+        free(path); [pool drain]; return 0;
+    case SERVICE_INSTALL_REJECT_INVALID:
+        warn("yabai: '%s' is malformed, a symlink, or uses another label; refusing to overwrite\n", path);
+        free(path); [pool drain]; return 1;
+    case SERVICE_INSTALL_REJECT_MISMATCH:
+        warn("yabai: service executable mismatch\n  installed: %s\n  invoked:   %s\n"
+             "Use --install-service --replace to update it explicitly\n",
+             configured, current);
+        free(path); [pool drain]; return 1;
+    case SERVICE_INSTALL_REJECT_LOADED:
+        warn("yabai: service is loaded; run --stop-service before installation/replacement\n");
+        free(path); [pool drain]; return 1;
+    case SERVICE_INSTALL_WRITE:
+        break;
+    }
+
+    int result = service_install_internal(path);
+    if (!result) {
+        printf("yabai: %s service for %s\n",
+               state == SERVICE_PLIST_MISSING ? "installed" : "replaced", current);
+    } else {
+        warn("yabai: failed to write service plist '%s'\n", path);
+    }
+    free(path);
+    [pool drain];
+    return result;
 }
 
 static int service_uninstall(void)
@@ -192,15 +538,15 @@ static int service_uninstall(void)
 
 static int service_start(void)
 {
-    char *yabai_plist_path = populate_plist_path();
-    if (!file_exists(yabai_plist_path)) {
-        warn("yabai: service file '%s' is not installed! attempting installation..\n", yabai_plist_path);
-
-        int result = service_install_internal(yabai_plist_path);
-        if (result) {
-            error("yabai: service file '%s' could not be installed! abort..\n", yabai_plist_path);
-        }
+    if (service_launchd_job("com.koekeishiya.yabai", NULL) ||
+        service_launchd_job("homebrew.mxcl.yabai", NULL)) {
+        warn("yabai: competing yabai launchd job is loaded; stop it before starting this service\n");
+        return 1;
     }
+    // Keep the historical auto-install behavior, but never start a plist
+    // pointing at a different yabai binary without explicit replacement.
+    if (service_install(false) != 0) return 1;
+    char *yabai_plist_path = populate_plist_path();
 
     char service_target[MAXLEN];
     snprintf(service_target, sizeof(service_target), "gui/%d/%s", getuid(), _NAME_YABAI_PLIST);
@@ -233,7 +579,9 @@ static int service_start(void)
         //
 
         const char *const args2[] = { _PATH_LAUNCHCTL, "bootstrap", domain_target, yabai_plist_path, NULL };
-        return safe_exec((char *const*)args2, false);
+        int result = safe_exec((char *const*)args2, false);
+        free(yabai_plist_path);
+        return result ? result : service_wait_for_ready();
     } else {
 
         //
@@ -243,22 +591,41 @@ static int service_start(void)
         //
 
         const char *const args[] = { _PATH_LAUNCHCTL, "kickstart", service_target, NULL };
-        return safe_exec((char *const*)args, false);
+        int result = safe_exec((char *const*)args, false);
+        free(yabai_plist_path);
+        return result ? result : service_wait_for_ready();
     }
 }
 
 static int service_restart(void)
 {
+    if (service_launchd_job("com.koekeishiya.yabai", NULL) ||
+        service_launchd_job("homebrew.mxcl.yabai", NULL)) {
+        warn("yabai: competing yabai launchd job is loaded; stop it before restarting\n");
+        return 1;
+    }
     char *yabai_plist_path = populate_plist_path();
-    if (!file_exists(yabai_plist_path)) {
-        error("yabai: service file '%s' is not installed! abort..\n", yabai_plist_path);
+    char configured[4096] = {0}, invoked[4096] = {0};
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    bool valid = service_read_plist_executable(
+        yabai_plist_path, configured, sizeof(configured)) == SERVICE_PLIST_VALID &&
+        service_self_executable(invoked, sizeof(invoked)) &&
+        service_same_executable(configured, invoked);
+    [pool drain];
+    if (!valid) {
+        warn("yabai: service is missing, invalid, or configured for another binary; "
+             "check --service-status\n");
+        free(yabai_plist_path);
+        return 1;
     }
 
     char service_target[MAXLEN];
     snprintf(service_target, sizeof(service_target), "gui/%d/%s", getuid(), _NAME_YABAI_PLIST);
 
     const char *const args[] = { _PATH_LAUNCHCTL, "kickstart", "-k", service_target, NULL };
-    return safe_exec((char *const*)args, false);
+    int result = safe_exec((char *const*)args, false);
+    free(yabai_plist_path);
+    return result ? result : service_wait_for_ready();
 }
 
 static int service_stop(void)
