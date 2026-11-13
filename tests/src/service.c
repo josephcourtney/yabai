@@ -47,13 +47,16 @@ TEST_FUNC(service_plist_rejects_other_labels_and_symlinks,
     NSString *alias = [path stringByAppendingString:@".link"];
     unlink([path fileSystemRepresentation]);
     unlink([alias fileSystemRepresentation]);
+    char executable[4096] = {0};
+    TEST_CHECK(service_read_plist_executable(
+                   [path fileSystemRepresentation], executable, sizeof(executable)),
+               SERVICE_PLIST_MISSING);
     NSDictionary *valid = [NSDictionary dictionaryWithObjectsAndKeys:
                            [NSString stringWithUTF8String:_NAME_YABAI_PLIST], @"Label",
                            [NSArray arrayWithObject:@"/tmp/yabai-test-binary"], @"ProgramArguments",
                            nil];
     TEST_CHECK([valid writeToFile:path atomically:YES], true);
 
-    char executable[4096] = {0};
     enum service_plist_state state = service_read_plist_executable(
         [path fileSystemRepresentation], executable, sizeof(executable));
     TEST_CHECK(state, SERVICE_PLIST_VALID);
@@ -68,6 +71,8 @@ TEST_FUNC(service_plist_rejects_other_labels_and_symlinks,
         [path fileSystemRepresentation], executable, sizeof(executable));
     TEST_CHECK(state, SERVICE_PLIST_INVALID);
 
+    // The target is valid here: only the symlink itself should be rejected.
+    TEST_CHECK([valid writeToFile:path atomically:YES], true);
     TEST_CHECK(symlink([path fileSystemRepresentation], [alias fileSystemRepresentation]) == 0, true);
     state = service_read_plist_executable(
         [alias fileSystemRepresentation], executable, sizeof(executable));
