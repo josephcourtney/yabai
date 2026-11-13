@@ -6,6 +6,8 @@
 #define SCRPT_ADD_UNINSTALL_OPT "--uninstall-sa"
 #define SCRPT_ADD_CHECK_OPT     "--check-sa"
 #define SERVICE_INSTALL_OPT     "--install-service"
+#define SERVICE_STATUS_OPT      "--service-status"
+#define SERVICE_REPLACE_OPT     "--replace"
 #define SERVICE_UNINSTALL_OPT   "--uninstall-service"
 #define SERVICE_START_OPT       "--start-service"
 #define SERVICE_RESTART_OPT     "--restart-service"
@@ -188,7 +190,9 @@ static void parse_arguments(int argc, char **argv)
                         "    --load-sa              Install and load the scripting-addition.\n"
                         "    --uninstall-sa         Uninstall the scripting-addition.\n"
                         "    --check-sa             Report whether the scripting-addition is loaded and healthy.\n"
-                        "    --install-service      Write launchd service file to disk.\n"
+                        "    --install-service      Install the matching launchd service (idempotent).\n"
+                        "    --install-service --replace  Replace a stopped, differently configured service.\n"
+                        "    --service-status       Report service configuration and runtime health.\n"
                         "    --uninstall-service    Remove launchd service file from disk.\n"
                         "    --start-service        Enable, load, and start the launchd service.\n"
                         "    --restart-service      Attempts to restart the service instance.\n"
@@ -227,7 +231,16 @@ static void parse_arguments(int argc, char **argv)
     }
 
     if (string_equals(argv[1], SERVICE_INSTALL_OPT)) {
-        exit(service_install());
+        if (argc == 2) exit(service_install(false));
+        if (argc == 3 && string_equals(argv[2], SERVICE_REPLACE_OPT)) {
+            exit(service_install(true));
+        }
+        error("yabai: usage: --install-service [--replace]\n");
+    }
+
+    if (string_equals(argv[1], SERVICE_STATUS_OPT)) {
+        if (argc != 2) error("yabai: usage: --service-status\n");
+        exit(service_status());
     }
 
     if (string_equals(argv[1], SERVICE_UNINSTALL_OPT)) {
