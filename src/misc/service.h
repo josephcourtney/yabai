@@ -231,6 +231,26 @@ static int service_status(void)
             state == SERVICE_PLIST_VALID ? "yes" : "invalid");
     fprintf(stdout, "configured-executable: %s\n",
             state == SERVICE_PLIST_VALID ? configured : "(unavailable)");
+
+    const char *configured_config = "(default; no --config argument)";
+    if (state == SERVICE_PLIST_VALID) {
+        NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:
+                               [NSString stringWithUTF8String:path]];
+        NSArray *arguments = [plist objectForKey:@"ProgramArguments"];
+        for (NSUInteger i = 1; i + 1 < [arguments count]; ++i) {
+            id argument = [arguments objectAtIndex:i];
+            if ([argument isKindOfClass:[NSString class]] &&
+                ([argument isEqualToString:@"--config"] ||
+                 [argument isEqualToString:@"-c"])) {
+                id value = [arguments objectAtIndex:i+1];
+                if ([value isKindOfClass:[NSString class]]) {
+                    configured_config = [value UTF8String];
+                    break;
+                }
+            }
+        }
+    }
+    fprintf(stdout, "config-argument: %s\n", configured_config);
     fprintf(stdout, "invoked-executable: %s\n",
             have_invoked ? invoked : "(unavailable)");
     fprintf(stdout, "executable-match: %s\n", matching ? "yes" : "no");
