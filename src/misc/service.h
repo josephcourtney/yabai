@@ -404,15 +404,10 @@ static int service_uninstall(void)
 
 static int service_start(void)
 {
+    // Keep the historical auto-install behavior, but never start a plist
+    // pointing at a different yabai binary without explicit replacement.
+    if (service_install(false) != 0) return 1;
     char *yabai_plist_path = populate_plist_path();
-    if (!file_exists(yabai_plist_path)) {
-        warn("yabai: service file '%s' is not installed! attempting installation..\n", yabai_plist_path);
-
-        int result = service_install_internal(yabai_plist_path);
-        if (result) {
-            error("yabai: service file '%s' could not be installed! abort..\n", yabai_plist_path);
-        }
-    }
 
     char service_target[MAXLEN];
     snprintf(service_target, sizeof(service_target), "gui/%d/%s", getuid(), _NAME_YABAI_PLIST);
@@ -462,8 +457,18 @@ static int service_start(void)
 static int service_restart(void)
 {
     char *yabai_plist_path = populate_plist_path();
-    if (!file_exists(yabai_plist_path)) {
-        error("yabai: service file '%s' is not installed! abort..\n", yabai_plist_path);
+    char configured[4096] = {0}, invoked[4096] = {0};
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    bool valid = service_read_plist_executable(
+        yabai_plist_path, configured, sizeof(configured)) == SERVICE_PLIST_VALID &&
+        service_self_executable(invoked, sizeof(invoked)) &&
+        service_same_executable(configured, invoked);
+    [pool drain];
+    if (!valid) {
+        warn("yabai: service is missing, invalid, or configured for another binary; "
+             "check --service-status\n");
+        free(yabai_plist_path);
+        return 1;
     }
 
     char service_target[MAXLEN];
