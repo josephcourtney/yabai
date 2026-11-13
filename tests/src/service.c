@@ -21,6 +21,16 @@ TEST_FUNC(service_install_policy_is_idempotent_and_refuses_unsafe_replacement,
                SERVICE_INSTALL_REJECT_INVALID);
 });
 
+TEST_FUNC(service_readiness_requires_running_matching_daemon_and_socket,
+{
+    TEST_CHECK(service_readiness_is_healthy(false, 0, false, false), false);
+    TEST_CHECK(service_readiness_is_healthy(true, 0, false, false), false);
+    TEST_CHECK(service_readiness_is_healthy(true, 123, false, true), false);
+    TEST_CHECK(service_readiness_is_healthy(true, 123, true, false), false);
+    TEST_CHECK(service_readiness_is_healthy(false, 123, true, true), false);
+    TEST_CHECK(service_readiness_is_healthy(true, 123, true, true), true);
+});
+
 TEST_FUNC(service_xml_escaping_is_lossless,
 {
     char *escaped = service_xml_escape("a&<>\"'b");
