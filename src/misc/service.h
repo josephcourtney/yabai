@@ -98,6 +98,165 @@ static char *populate_plist_path(void)
     return result;
 }
 
+// Service identity is the absolute executable selected by the caller, not
+// whichever yabai happens to be on PATH (which may be Homebrew's binary).
+static bool service_self_executable(char *output, size_t capacity)
+{
+    char path[4096];
+    uint32_t length = sizeof(path);
+    if (_NSGetExecutablePath(path, &length) != 0) return false;
+    return realpath(path, output) != NULL && strlen(output) < capacity;
+}
+
+static bool service_same_executable(const char *left, const char *right)
+{
+    if (!left || !right || !left[0] || !right[0]) return false;
+    char a[4096], b[4096];
+    if (realpath(left, a) && realpath(right, b)) {
+        return strcmp(a, b) == 0;
+    }
+    // A removed binary is never silently treated as the current executable.
+    return false;
+}
+
+enum service_plist_state
+{
+    SERVICE_PLIST_MISSING,
+    SERVICE_PLIST_VALID,
+    SERVICE_PLIST_INVALID
+};
+
+// Accept only the expected launchd label and an absolute first executable.
+// Never overwrite a foreign or malformed plist, even with --replace.
+static enum service_plist_state service_read_plist_executable(const char *path,
+                                                              char *configured,
+                                                              size_t capacity)
+{
+    if (configured && capacity) configured[0] = '\0';
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT ? SERVICE_PLIST_MISSING : SERVICE_PLIST_INVALID;
+    }
+    if (!S_ISREG(st.st_mode)) return SERVICE_PLIST_INVALID;
+
+    NSString *file = [NSString stringWithUTF8String:path];
+    NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:file];
+    if (![plist isKindOfClass:[NSDictionary class]]) return SERVICE_PLIST_INVALID;
+
+    id label = [plist objectForKey:@"Label"];
+    id arguments = [plist objectForKey:@"ProgramArguments"];
+    if (![label isKindOfClass:[NSString class]] ||
+        ![label isEqualToString:[NSString stringWithUTF8String:_NAME_YABAI_PLIST]] ||
+        ![arguments isKindOfClass:[NSArray class]] ||
+        [arguments count] == 0) return SERVICE_PLIST_INVALID;
+
+    id executable = [arguments objectAtIndex:0];
+    if (![executable isKindOfClass:[NSString class]]) return SERVICE_PLIST_INVALID;
+    const char *value = [executable UTF8String];
+    if (!value || value[0] != '/' || strlen(value) >= capacity) return SERVICE_PLIST_INVALID;
+    memcpy(configured, value, strlen(value) + 1);
+    return SERVICE_PLIST_VALID;
+}
+
+// launchctl's successful 'print' means the job is bootstrapped. Its PID is
+// present only when there is a running instance. The command is composed
+// entirely of constant text and a numeric UID (no user-controlled shell input).
+static bool service_launchd_job(const char *label, pid_t *running_pid)
+{
+    if (running_pid) *running_pid = 0;
+    char command[256];
+    int length = snprintf(command, sizeof(command),
+                          "/bin/launchctl print gui/%u/%s 2>/dev/null",
+                          (unsigned)getuid(), label);
+    if (length <= 0 || length >= (int)sizeof(command)) return false;
+    FILE *pipe = popen(command, "r");
+    if (!pipe) return false;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), pipe)) {
+        char *cursor = line;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (strncmp(cursor, "pid = ", 6) == 0 && running_pid) {
+            char *end = NULL;
+            errno = 0;
+            long value = strtol(cursor + 6, &end, 10);
+            if (!errno && end != cursor + 6 && value > 0 && value <= INT_MAX) {
+                *running_pid = (pid_t)value;
+            }
+        }
+    }
+    int status = pclose(pipe);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static bool service_message_socket_reachable(void)
+{
+    const char *user = getenv("USER");
+    if (!user) return false;
+    char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    int length = snprintf(path, sizeof(path), "/tmp/yabai_%s.socket", user);
+    if (length <= 0 || length >= (int)sizeof(path)) return false;
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_un address = {0};
+    address.sun_family = AF_UNIX;
+    memcpy(address.sun_path, path, (size_t)length + 1);
+    bool reachable = connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0;
+    close(fd);
+    return reachable;
+}
+
+static int service_status(void)
+{
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    char *path = populate_plist_path();
+    char configured[4096] = {0}, invoked[4096] = {0};
+    bool have_invoked = service_self_executable(invoked, sizeof(invoked));
+    enum service_plist_state state = service_read_plist_executable(
+        path, configured, sizeof(configured));
+    pid_t pid = 0;
+    bool loaded = service_launchd_job(_NAME_YABAI_PLIST, &pid);
+    char running[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    bool have_running = pid > 0 && proc_pidpath(pid, running, sizeof(running)) > 0;
+    bool matching = state == SERVICE_PLIST_VALID && have_invoked &&
+                    service_same_executable(configured, invoked);
+    bool running_matches = have_running && have_invoked &&
+                            service_same_executable(running, invoked);
+    bool socket_ready = pid > 0 && service_message_socket_reachable();
+
+    fprintf(stdout, "service: %s\n", _NAME_YABAI_PLIST);
+    fprintf(stdout, "plist: %s\n", path);
+    fprintf(stdout, "installed: %s\n",
+            state == SERVICE_PLIST_MISSING ? "no" :
+            state == SERVICE_PLIST_VALID ? "yes" : "invalid");
+    fprintf(stdout, "configured-executable: %s\n",
+            state == SERVICE_PLIST_VALID ? configured : "(unavailable)");
+    fprintf(stdout, "invoked-executable: %s\n",
+            have_invoked ? invoked : "(unavailable)");
+    fprintf(stdout, "executable-match: %s\n", matching ? "yes" : "no");
+    fprintf(stdout, "bootstrapped: %s\n", loaded ? "yes" : "no");
+    fprintf(stdout, "pid: %d\n", (int)pid);
+    fprintf(stdout, "running-executable: %s\n",
+            have_running ? running : "(unavailable)");
+    fprintf(stdout, "running-executable-match: %s\n",
+            running_matches ? "yes" : "no");
+    fprintf(stdout, "message-socket: %s\n", socket_ready ? "reachable" : "unreachable");
+
+    const char *other_labels[] = {"com.koekeishiya.yabai", "homebrew.mxcl.yabai"};
+    bool conflict = false;
+    for (int i = 0; i < (int)(sizeof(other_labels)/sizeof(other_labels[0])); ++i) {
+        if (service_launchd_job(other_labels[i], NULL)) {
+            fprintf(stdout, "competing-service: %s\n", other_labels[i]);
+            conflict = true;
+        }
+    }
+    int result = state == SERVICE_PLIST_VALID && matching && loaded &&
+                 pid > 0 && running_matches && socket_ready && !conflict ? 0 : 1;
+    free(path);
+    [pool drain];
+    return result;
+}
+
 static char *populate_plist(int *length)
 {
     char *user = getenv("USER");
