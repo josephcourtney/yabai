@@ -391,6 +391,26 @@ static int service_install_internal(char *yabai_plist_path)
     return result;
 }
 
+enum service_install_decision
+{
+    SERVICE_INSTALL_NOOP,
+    SERVICE_INSTALL_WRITE,
+    SERVICE_INSTALL_REJECT_INVALID,
+    SERVICE_INSTALL_REJECT_MISMATCH,
+    SERVICE_INSTALL_REJECT_LOADED
+};
+
+static enum service_install_decision service_install_decide(
+    enum service_plist_state state, bool executable_matches,
+    bool replace, bool loaded)
+{
+    if (state == SERVICE_PLIST_INVALID) return SERVICE_INSTALL_REJECT_INVALID;
+    if (state == SERVICE_PLIST_VALID && executable_matches) return SERVICE_INSTALL_NOOP;
+    if (state == SERVICE_PLIST_VALID && !replace) return SERVICE_INSTALL_REJECT_MISMATCH;
+    if (loaded) return SERVICE_INSTALL_REJECT_LOADED;
+    return SERVICE_INSTALL_WRITE;
+}
+
 static int service_install(bool replace)
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -403,27 +423,27 @@ static int service_install(bool replace)
         free(path); [pool drain]; return 1;
     }
 
-    if (state == SERVICE_PLIST_INVALID) {
-        warn("yabai: '%s' is malformed, a symlink, or uses another label; refusing to overwrite\n", path);
-        free(path); [pool drain]; return 1;
-    }
-
-    if (state == SERVICE_PLIST_VALID &&
-        service_same_executable(configured, current)) {
+    bool same = state == SERVICE_PLIST_VALID &&
+                service_same_executable(configured, current);
+    enum service_install_decision decision = service_install_decide(
+        state, same, replace, service_launchd_job(_NAME_YABAI_PLIST, NULL));
+    switch (decision) {
+    case SERVICE_INSTALL_NOOP:
         printf("yabai: service already installed for %s\n", current);
         free(path); [pool drain]; return 0;
-    }
-
-    if (state == SERVICE_PLIST_VALID && !replace) {
+    case SERVICE_INSTALL_REJECT_INVALID:
+        warn("yabai: '%s' is malformed, a symlink, or uses another label; refusing to overwrite\n", path);
+        free(path); [pool drain]; return 1;
+    case SERVICE_INSTALL_REJECT_MISMATCH:
         warn("yabai: service executable mismatch\n  installed: %s\n  invoked:   %s\n"
              "Use --install-service --replace to update it explicitly\n",
              configured, current);
         free(path); [pool drain]; return 1;
-    }
-
-    if (service_launchd_job(_NAME_YABAI_PLIST, NULL)) {
+    case SERVICE_INSTALL_REJECT_LOADED:
         warn("yabai: service is loaded; run --stop-service before installation/replacement\n");
         free(path); [pool drain]; return 1;
+    case SERVICE_INSTALL_WRITE:
+        break;
     }
 
     int result = service_install_internal(path);
