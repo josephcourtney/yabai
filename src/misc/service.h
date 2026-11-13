@@ -104,8 +104,9 @@ static bool service_self_executable(char *output, size_t capacity)
 {
     char path[4096];
     uint32_t length = sizeof(path);
-    if (_NSGetExecutablePath(path, &length) != 0) return false;
-    return realpath(path, output) != NULL && strlen(output) < capacity;
+    if (!output || capacity < PATH_MAX ||
+        _NSGetExecutablePath(path, &length) != 0) return false;
+    return realpath(path, output) != NULL;
 }
 
 static bool service_same_executable(const char *left, const char *right)
@@ -328,9 +329,8 @@ static char *populate_plist(int *length)
     }
 
     char exe_path[4096];
-    unsigned int exe_path_size = sizeof(exe_path);
-    if (_NSGetExecutablePath(exe_path, &exe_path_size) < 0) {
-        error("yabai: unable to retrieve path of executable! abort..\n");
+    if (!service_self_executable(exe_path, sizeof(exe_path))) {
+        error("yabai: unable to resolve absolute path of executable!\n");
     }
 
     char *escaped_exe = service_xml_escape(exe_path);
