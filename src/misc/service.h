@@ -384,6 +384,14 @@ static int service_install_internal(char *yabai_plist_path)
     }
     if (!result && fsync(fd) != 0) result = 1;
     if (close(fd) != 0) result = 1;
+    if (!result) {
+        char parsed[4096];
+        if (service_read_plist_executable(temporary, parsed, sizeof(parsed)) !=
+            SERVICE_PLIST_VALID) {
+            warn("yabai: generated plist is not valid; refusing to install\n");
+            result = 1;
+        }
+    }
     if (!result && rename(temporary, yabai_plist_path) != 0) result = 1;
     if (result) unlink(temporary);
     free(temporary);
@@ -471,6 +479,11 @@ static int service_uninstall(void)
 
 static int service_start(void)
 {
+    if (service_launchd_job("com.koekeishiya.yabai", NULL) ||
+        service_launchd_job("homebrew.mxcl.yabai", NULL)) {
+        warn("yabai: competing yabai launchd job is loaded; stop it before starting this service\n");
+        return 1;
+    }
     // Keep the historical auto-install behavior, but never start a plist
     // pointing at a different yabai binary without explicit replacement.
     if (service_install(false) != 0) return 1;
@@ -523,6 +536,11 @@ static int service_start(void)
 
 static int service_restart(void)
 {
+    if (service_launchd_job("com.koekeishiya.yabai", NULL) ||
+        service_launchd_job("homebrew.mxcl.yabai", NULL)) {
+        warn("yabai: competing yabai launchd job is loaded; stop it before restarting\n");
+        return 1;
+    }
     char *yabai_plist_path = populate_plist_path();
     char configured[4096] = {0}, invoked[4096] = {0};
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
